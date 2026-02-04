@@ -146,6 +146,7 @@ function createExerciseDetector() {
   let currentExercise = null;
   let lastRepTime = 0;
   let lastExerciseChange = Date.now();
+  let allowAutoDetect = true;
 
   // State tracking
   let state = "IDLE";
@@ -260,46 +261,41 @@ function createExerciseDetector() {
   }
 
   // Exercise classification
-  function classifyExercise(features) {
+  function classifyExercise(features, preferredExercise = null) {
+    console.log("preferredExercise", preferredExercise);
     const { gyroMag, verticalAcc, axisRatios, rawAcc, avgGyro, accMag } =
       features;
 
     const { gURatio, gVRatio, gWRatio } = axisRatios;
 
-    // Check for Goblet Squat (based on your CSV data)
-    // Squats have large vertical acceleration and relatively low gyro
-    if (Math.abs(verticalAcc) > 1.5 && gyroMag < 2.0 && accMag > 8.0) {
-      return "GOBLET_SQUAT";
+    // Helper checks for each exercise
+    const checks = {
+      GOBLET_SQUAT: () =>
+        Math.abs(verticalAcc) > 1.5 && gyroMag < 2.0 && accMag > 8.0,
+      ARNOLD_PRESS: () =>
+        gWRatio > 0.6 && gyroMag > 1.5 && Math.abs(verticalAcc) > 0.5,
+      CROSSBODY_HAMMER: () =>
+        gVRatio > 0.5 && gyroMag > 1.2 && gVRatio > gURatio * 1.2,
+      HAMMER_CURL: () => gVRatio > 0.4 && gVRatio > gURatio && gyroMag > 0.8,
+      NORMAL_CURL: () => gURatio > 0.4 && gURatio > gVRatio && gyroMag > 0.8,
+    };
+
+    // If a preferred exercise is provided, only validate that one
+    if (preferredExercise && checks[preferredExercise]) {
+      return checks[preferredExercise]() ? preferredExercise : null;
     }
 
-    // Check for Arnold Press (significant rotation - high gW ratio)
-    if (gWRatio > 0.6 && gyroMag > 1.5 && Math.abs(verticalAcc) > 0.5) {
-      return "ARNOLD_PRESS";
-    }
-
-    // Check for Crossbody Hammer (high V-axis movement)
-    if (gVRatio > 0.5 && gyroMag > 1.2 && gVRatio > gURatio * 1.2) {
-      return "CROSSBODY_HAMMER";
-    }
-
-    // Check for Hammer Curl (more V-axis than U-axis)
-    if (gVRatio > 0.4 && gVRatio > gURatio && gyroMag > 0.8) {
-      return "HAMMER_CURL";
-    }
-
-    // Check for Normal Curl (more U-axis than V-axis)
-    if (gURatio > 0.4 && gURatio > gVRatio && gyroMag > 0.8) {
-      return "NORMAL_CURL";
-    }
+    // Otherwise run the standard detection order
+//     if (checks.GOBLET_SQUAT()) return "GOBLET_SQUAT";
+//     if (checks.ARNOLD_PRESS()) return "ARNOLD_PRESS";
+//     if (checks.CROSSBODY_HAMMER()) return "CROSSBODY_HAMMER";
+//     if (checks.HAMMER_CURL()) return "HAMMER_CURL";
+//     if (checks.NORMAL_CURL()) return "NORMAL_CURL";
 
     // Default based on highest ratio
-    if (gURatio > gVRatio && gURatio > gWRatio) {
-      return "NORMAL_CURL";
-    } else if (gVRatio > gURatio && gVRatio > gWRatio) {
-      return "HAMMER_CURL";
-    } else if (gWRatio > gURatio && gWRatio > gVRatio) {
-      return "ARNOLD_PRESS";
-    }
+//     if (gURatio > gVRatio && gURatio > gWRatio) return "NORMAL_CURL";
+//     if (gVRatio > gURatio && gVRatio > gWRatio) return "HAMMER_CURL";
+//     if (gWRatio > gURatio && gWRatio > gVRatio) return "ARNOLD_PRESS";
 
     return null;
   }
@@ -431,24 +427,28 @@ function createExerciseDetector() {
     // Extract features
     const features = extractFeatures(gyro, acc);
 
-    // Exercise classification (if not set or it's been a while)
-    if (!currentExercise || timestamp - lastExerciseChange > 5000) {
-      const detectedExercise = classifyExercise(features);
-      if (detectedExercise && detectedExercise !== currentExercise) {
-        currentExercise = detectedExercise;
-        lastExerciseChange = timestamp;
-        resetForNewExercise();
-        console.log(`Exercise changed to: ${currentExercise}`);
+    // Exercise classification (if auto-detect enabled and not set or it's been a while)
+    if (allowAutoDetect) {
+      if (!currentExercise || timestamp - lastExerciseChange > 5000) {
+        const detectedExercise = classifyExercise(features, currentExercise);
+        if (detectedExercise && detectedExercise !== currentExercise) {
+          currentExercise = detectedExercise;
+          lastExerciseChange = timestamp;
+          resetForNewExercise();
+          console.log(`Exercise changed to: ${currentExercise}`);
+        }
       }
     }
 
-    // If still no exercise, try to detect
-    if (!currentExercise) {
-      const detectedExercise = classifyExercise(features);
-      if (detectedExercise) {
-        currentExercise = detectedExercise;
-        lastExerciseChange = timestamp;
-        resetForNewExercise();
+    // If still no exercise, try to detect (only if auto-detect enabled)
+    if (allowAutoDetect) {
+      if (!currentExercise) {
+        const detectedExercise = classifyExercise(features);
+        if (detectedExercise) {
+          currentExercise = detectedExercise;
+          lastExerciseChange = timestamp;
+          resetForNewExercise();
+        }
       }
     }
 
@@ -496,7 +496,24 @@ function createExerciseDetector() {
     resetForNewExercise();
   }
 
-  return { update, reset, getExercise: () => currentExercise };
+  function setAutoDetect(flag) {
+    allowAutoDetect = !!flag;
+  }
+
+  function setExercise(ex) {
+    currentExercise = ex;
+    lastExerciseChange = Date.now();
+    resetForNewExercise();
+    console.log(`Manual exercise set: ${currentExercise}`);
+  }
+
+  return {
+    update,
+    reset,
+    getExercise: () => currentExercise,
+    setAutoDetect,
+    setExercise,
+  };
 }
 
 const log = [];
@@ -583,6 +600,12 @@ function createCSVProcessor() {
 export default function DumbbellRepCounter() {
   // Refs for BLE and detector
   const detectorRef = useRef(createExerciseDetector());
+  // Disable auto-detection by default; require user selection
+  useEffect(() => {
+    if (detectorRef.current && detectorRef.current.setAutoDetect) {
+      detectorRef.current.setAutoDetect(false);
+    }
+  }, []);
   const csvProcessorRef = useRef(createCSVProcessor());
   const deviceRef = useRef(null);
   const charRef = useRef(null);
@@ -1055,6 +1078,13 @@ export default function DumbbellRepCounter() {
     setShowExerciseSelect(false);
   };
 
+  // Bind manual selection to detector so detection only runs for chosen exercise
+  useEffect(() => {
+    if (detectorRef.current && detectorRef.current.setExercise) {
+      detectorRef.current.setExercise(manualExercise);
+    }
+  }, [manualExercise]);
+
   /* ================= UI UPDATE LOOP ================= */
   useEffect(() => {
     let lastGraphUpdate = 0;
@@ -1204,9 +1234,9 @@ export default function DumbbellRepCounter() {
       style={{
         height: "100vh",
         width: "100vw",
-        display:"flex",
-        flexDirection:"column",
-        justifyContent:"center"
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
       }}
     >
       <div
@@ -1266,13 +1296,13 @@ export default function DumbbellRepCounter() {
               flexWrap: "wrap",
             }}
           >
-              <div
-                style={{
-                  display: "flex",
-                  gap: "12px",
-                  alignItems: "center",
-                  position: "relative",
-                }}
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                alignItems: "center",
+                position: "relative",
+              }}
             >
               <button
                 onClick={connectBLE}
@@ -1390,8 +1420,8 @@ export default function DumbbellRepCounter() {
                     padding: "10px",
                     boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
                     zIndex: 1000,
-                    top:50,
-                    left:"70%"
+                    top: 50,
+                    left: "70%",
                   }}
                 >
                   {Object.keys(exerciseNames).map((exercise) => (
