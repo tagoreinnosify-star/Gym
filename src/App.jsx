@@ -768,7 +768,7 @@ export default function DumbbellRepCounter() {
     <div
       style={{
         padding: "20px",
-        maxWidth: "1200px",
+        width: "100vw",
         margin: "0 auto",
         fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
         backgroundColor: "#f5f5f5",
