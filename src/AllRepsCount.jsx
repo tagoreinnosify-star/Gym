@@ -16,20 +16,20 @@ import {
 import * as XLSX from "xlsx";
 
 /* ================= CONFIG ================= */
-const FS = 10; // Sampling frequency from your data (100ms intervals)
-const LP_ALPHA = 0.3; // Adjusted low-pass filter coefficient
-const ACC_ALPHA = 0.1; // Gravity estimation smoothing
+const FS = 50; // Sampling frequency from your data (100ms intervals)
+const LP_ALPHA = 0.25; // Adjusted low-pass filter coefficient
+const ACC_ALPHA = 0.5 ; // Gravity estimation smoothing
 
 // Optimized thresholds based on your CSV data analysis
 const EXERCISE_THRESHOLDS = {
   NORMAL_CURL: {
     MIN_GYRO: 0.8,
-    MIN_REP_GYRO: 1.5,
-    ENERGY_THRESH: 2.0,
-    MIN_REP_MS: 800,
+    MIN_REP_GYRO: 2,
+    ENERGY_THRESH: 1.5,
+    MIN_REP_MS: 950,
     MIN_VERT_ACC: 0.2,
     MAX_VERT_ACC: 1.5,
-    GYRO_PEAK_THRESH: 0.4,
+    GYRO_PEAK_THRESH: 0.2,
   },
   HAMMER_CURL: {
     MIN_GYRO: 0.8,
@@ -44,7 +44,7 @@ const EXERCISE_THRESHOLDS = {
     MIN_GYRO: 1.0,
     MIN_REP_GYRO: 2.0,
     ENERGY_THRESH: 3.0,
-    MIN_REP_MS: 1000,
+    MIN_REP_MS: 1200,
     MIN_VERT_ACC: 0.3,
     MAX_VERT_ACC: 2.0,
     GYRO_PEAK_THRESH: 0.6,
@@ -267,7 +267,7 @@ function createExerciseDetector() {
       features;
 
     const { gURatio, gVRatio, gWRatio } = axisRatios;
-
+    console.log("gURatio, gVRatio, gWRatio",gURatio, gVRatio, gWRatio)
     // Helper checks for each exercise
     const checks = {
       GOBLET_SQUAT: () =>
@@ -278,6 +278,7 @@ function createExerciseDetector() {
         gVRatio > 0.5 && gyroMag > 1.2 && gVRatio > gURatio * 1.2,
       HAMMER_CURL: () => gVRatio > 0.4 && gVRatio > gURatio && gyroMag > 0.8,
       NORMAL_CURL: () => gURatio > 0.4 && gURatio > gVRatio && gyroMag > 0.8,
+      
     };
 
     // If a preferred exercise is provided, only validate that one
@@ -428,8 +429,8 @@ function createExerciseDetector() {
     const features = extractFeatures(gyro, acc);
 
     // Exercise classification (if auto-detect enabled and not set or it's been a while)
-    if (allowAutoDetect) {
-      if (!currentExercise || timestamp - lastExerciseChange > 5000) {
+    // if (allowAutoDetect) {
+    //   if (!currentExercise || timestamp - lastExerciseChange > 5000) {
         const detectedExercise = classifyExercise(features, currentExercise);
         if (detectedExercise && detectedExercise !== currentExercise) {
           currentExercise = detectedExercise;
@@ -437,20 +438,20 @@ function createExerciseDetector() {
           resetForNewExercise();
           console.log(`Exercise changed to: ${currentExercise}`);
         }
-      }
-    }
+    //   }
+    // }
 
     // If still no exercise, try to detect (only if auto-detect enabled)
-    if (allowAutoDetect) {
-      if (!currentExercise) {
-        const detectedExercise = classifyExercise(features);
-        if (detectedExercise) {
-          currentExercise = detectedExercise;
-          lastExerciseChange = timestamp;
-          resetForNewExercise();
-        }
-      }
-    }
+    // if (allowAutoDetect) {
+    //   if (!currentExercise) {
+    //     const detectedExercise = classifyExercise(features);
+    //     if (detectedExercise) {
+    //       currentExercise = detectedExercise;
+    //       lastExerciseChange = timestamp;
+    //       resetForNewExercise();
+    //     }
+    //   }
+    // }
 
     // Detect rep
     const repResult = detectRep(features, timestamp, groundTruthExercise);
@@ -730,7 +731,7 @@ export default function DumbbellRepCounter() {
 
     // Schedule next sample (simulate 100ms intervals as in your CSV)
     setTimeout(processNextCSVSample, 100);
-  }, [processingCSV]);
+  }, [processingCSV,setLastDataTime]);
 
   /* ================= BLE FUNCTIONS ================= */
   const connectBLE = useCallback(async () => {
