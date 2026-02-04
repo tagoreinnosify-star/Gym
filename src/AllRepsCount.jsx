@@ -15,24 +15,20 @@ import {
 } from "recharts";
 import * as XLSX from "xlsx";
 
-// Import exercise images
+// Import exercise images (you'll need to add these images to your project)
 import normalCurlImage from "./assets/bicep-curls.avif";
-import hammerCurlImage from "./assets/cross_hammer.jfif";
 import crossbodyHammerImage from "./assets/cross_hammer.jfif";
 import arnoldPressImage from "./assets/arnold-press.jpg";
 import gobletSquatImage from "./assets/goblet.avif";
 
-// Use placeholder images if actual images aren't available
+// Fallback placeholder images
 const exerciseImages = {
   NORMAL_CURL:
     normalCurlImage ||
     "https://via.placeholder.com/150/4CAF50/FFFFFF?text=Normal+Curl",
-  HAMMER_CURL:
-    hammerCurlImage ||
-    "https://via.placeholder.com/150/FF9800/FFFFFF?text=Hammer+Curl",
   CROSSBODY_HAMMER:
     crossbodyHammerImage ||
-    "https://via.placeholder.com/150/2196F3/FFFFFF?text=Crossbody+Hammer",
+    "https://via.placeholder.com/150/2196F3/FFFFFF?text=Crossbody",
   ARNOLD_PRESS:
     arnoldPressImage ||
     "https://via.placeholder.com/150/9C27B0/FFFFFF?text=Arnold+Press",
@@ -56,19 +52,7 @@ const EXERCISE_THRESHOLDS = {
     MIN_VERT_ACC: 0.2,
     MAX_VERT_ACC: 1.5,
     GYRO_PEAK_THRESH: 0.2,
-    MIN_U_RATIO: 0.6, // Minimum U-axis ratio for good form
-    MAX_V_RATIO: 0.3, // Maximum V-axis ratio for good form
-  },
-  HAMMER_CURL: {
-    MIN_GYRO: 0.8,
-    MIN_REP_GYRO: 1.5,
-    ENERGY_THRESH: 2.0,
-    MIN_REP_MS: 800,
-    MIN_VERT_ACC: 0.2,
-    MAX_VERT_ACC: 1.5,
-    GYRO_PEAK_THRESH: 0.4,
-    MIN_V_RATIO: 0.6, // Minimum V-axis ratio for good form
-    MAX_U_RATIO: 0.3, // Maximum U-axis ratio for good form
+    MIN_U_RATIO: 0.6, // For good form check
   },
   CROSSBODY_HAMMER: {
     MIN_GYRO: 1.0,
@@ -78,8 +62,8 @@ const EXERCISE_THRESHOLDS = {
     MIN_VERT_ACC: 0.3,
     MAX_VERT_ACC: 2.0,
     GYRO_PEAK_THRESH: 0.6,
-    MIN_V_RATIO: 0.7, // Higher V-axis ratio for crossbody
-    MIN_GW_RATIO: 1.5, // Cross-body movement has higher gW
+    MIN_GW_RATIO: 1.5,
+    MIN_V_RATIO: 0.6, // For good form check
   },
   ARNOLD_PRESS: {
     MIN_GYRO: 1.2,
@@ -89,8 +73,8 @@ const EXERCISE_THRESHOLDS = {
     MIN_VERT_ACC: 0.4,
     MAX_VERT_ACC: 2.5,
     GYRO_PEAK_THRESH: 0.8,
-    MIN_W_RATIO: 0.5, // Minimum W-axis rotation
-    MIN_GW_RATIO: 2.0, // Arnold press has significant rotation
+    MIN_GW_RATIO: 2.0,
+    MIN_W_RATIO: 0.5, // For good form check
   },
   GOBLET_SQUAT: {
     MIN_GYRO: 0.6,
@@ -100,8 +84,8 @@ const EXERCISE_THRESHOLDS = {
     MIN_VERT_ACC: 0.5,
     MAX_VERT_ACC: 3.0,
     GYRO_PEAK_THRESH: 0.3,
-    MIN_AZ_AMPLITUDE: 2.0, // Squats have large vertical acceleration changes
-    MIN_W_ACC: 1.5, // Minimum vertical acceleration
+    MIN_AZ_AMPLITUDE: 2.0,
+    MIN_VERTICAL_ACC: 1.5, // For good form check
   },
 };
 
@@ -157,17 +141,16 @@ function createPeakDetector() {
 }
 
 /* ================= EXERCISE DETECTOR ================= */
-function createExerciseDetector(selectedExercise) {
+function createExerciseDetector() {
   // Rep counts for each exercise with Good/Bad tracking
   let exerciseStats = {
-    NORMAL_CURL: { good: 0, bad: 0, total: 0 },
-    HAMMER_CURL: { good: 0, bad: 0, total: 0 },
-    CROSSBODY_HAMMER: { good: 0, bad: 0, total: 0 },
-    ARNOLD_PRESS: { good: 0, bad: 0, total: 0 },
-    GOBLET_SQUAT: { good: 0, bad: 0, total: 0 },
+    NORMAL_CURL: { total: 0, good: 0, bad: 0 },
+    CROSSBODY_HAMMER: { total: 0, good: 0, bad: 0 },
+    ARNOLD_PRESS: { total: 0, good: 0, bad: 0 },
+    GOBLET_SQUAT: { total: 0, good: 0, bad: 0 },
   };
 
-  let currentExercise = selectedExercise;
+  let currentExercise = null;
   let lastRepTime = 0;
 
   // State tracking
@@ -185,26 +168,12 @@ function createExerciseDetector(selectedExercise) {
   // Peak detector
   const peakDetector = createPeakDetector();
 
-  // Exercise features
-  let exerciseFeatures = {
-    dominantAxis: null,
-    gyroHistory: [],
-    accHistory: [],
-    peakHistory: [],
-  };
-
   function resetForNewExercise() {
     state = "IDLE";
     energy = 0;
     lpFilter = { value: 0 };
     gyroBuffer = [];
     accMagnitudeBuffer = [];
-    exerciseFeatures = {
-      dominantAxis: null,
-      gyroHistory: [],
-      accHistory: [],
-      peakHistory: [],
-    };
     peakDetector.reset();
   }
 
@@ -276,67 +245,63 @@ function createExerciseDetector(selectedExercise) {
       avgAcc,
       dominantAxis,
       axisRatios: { gURatio, gVRatio, gWRatio },
-      verticalAcceleration: aW,
       rawAcc: [...acc],
       rawGyro: [...gyro],
       timestamp: Date.now(),
     };
   }
 
-  // Check if rep has good form
-  function checkGoodForm(features, exerciseType) {
-    const { axisRatios, verticalAcceleration, gyroMag } = features;
+  // Determine what exercise is actually being performed
+  function detectActualExercise(features) {
+    const { axisRatios, verticalAcc, gyroMag, accMag } = features;
     const { gURatio, gVRatio, gWRatio } = axisRatios;
-    const thresholds = EXERCISE_THRESHOLDS[exerciseType];
 
-    switch (exerciseType) {
-      case "NORMAL_CURL":
-        // Good form: High U-axis rotation, low V-axis movement
-        return (
-          gURatio >= thresholds.MIN_U_RATIO &&
-          gVRatio <= thresholds.MAX_V_RATIO &&
-          gyroMag >= thresholds.MIN_REP_GYRO * 0.7
-        );
-
-      case "HAMMER_CURL":
-        // Good form: High V-axis movement, low U-axis rotation
-        return (
-          gVRatio >= thresholds.MIN_V_RATIO &&
-          gURatio <= thresholds.MAX_U_RATIO &&
-          gyroMag >= thresholds.MIN_REP_GYRO * 0.7
-        );
-
-      case "CROSSBODY_HAMMER":
-        // Good form: Very high V-axis movement
-        return (
-          gVRatio >= thresholds.MIN_V_RATIO && Math.abs(gV) > Math.abs(gU) * 1.5
-        );
-
-      case "ARNOLD_PRESS":
-        // Good form: Significant rotation (W-axis)
-        return (
-          gWRatio >= thresholds.MIN_W_RATIO &&
-          Math.abs(gW) > Math.abs(gU) &&
-          Math.abs(gW) > Math.abs(gV)
-        );
-
-      case "GOBLET_SQUAT":
-        // Good form: Good vertical acceleration
-        return (
-          Math.abs(verticalAcceleration) >= thresholds.MIN_W_ACC &&
-          gyroMag < 2.0 // Low rotation during squats
-        );
-
-      default:
-        return false;
+    console.log("axisRatios, verticalAcc, gyroMag, accMag,",axisRatios, verticalAcc, gyroMag, accMag )
+console.log
+    // Check for Goblet Squat first (has distinct pattern)
+    if (Math.abs(verticalAcc) > 1.5 && gyroMag < 2.0 && accMag > 8.0) {
+      return "GOBLET_SQUAT";
     }
+
+    // Check for Arnold Press (high rotation)
+    if (gWRatio > 0.6 && gyroMag > 1.5 && Math.abs(verticalAcc) > 0.5) {
+      return "ARNOLD_PRESS";
+    }
+
+    // Check for Crossbody Hammer (high V-axis)
+    if (gVRatio > 0.5 && gyroMag > 1.2 && gVRatio > gURatio * 1.2) {
+      return "CROSSBODY_HAMMER";
+    }
+
+    // Check for Normal Curl (high U-axis)
+    if (gURatio > 0.4 && gURatio > gVRatio && gyroMag > 0.8) {
+      return "NORMAL_CURL";
+    }
+
+    // Default based on highest ratio
+    if (gURatio > gVRatio && gURatio > gWRatio) {
+      return "NORMAL_CURL";
+    } else if (gVRatio > gURatio && gVRatio > gWRatio) {
+      return "CROSSBODY_HAMMER";
+    } else if (gWRatio > gURatio && gWRatio > gVRatio) {
+      return "ARNOLD_PRESS";
+    }
+
+    // If nothing matches, return the selected exercise
+    return currentExercise;
+  }
+
+  // Check if the actual exercise matches the selected exercise
+  function checkFormCorrectness(selectedExercise, actualExercise) {
+    return selectedExercise === actualExercise;
   }
 
   // Rep detection logic
   function detectRep(features, timestamp) {
     const { gyroMag, verticalAcc, axisRatios } = features;
 
-    if (!currentExercise) return { repDetected: false, isGoodForm: false };
+    if (!currentExercise)
+      return { repDetected: false, isGoodForm: false, actualExercise: null };
 
     const thresholds = EXERCISE_THRESHOLDS[currentExercise];
 
@@ -364,6 +329,7 @@ function createExerciseDetector(selectedExercise) {
     // Rep detection conditions
     let repDetected = false;
     let isGoodForm = false;
+    let actualExercise = null;
 
     if (peak && state === "MOVING") {
       const timeSinceLastRep = timestamp - lastRepTime;
@@ -374,42 +340,16 @@ function createExerciseDetector(selectedExercise) {
         peakValue > thresholds.MIN_REP_GYRO &&
         timeSinceLastRep > thresholds.MIN_REP_MS
       ) {
-        // Additional validation based on exercise type
-        let isValidRep = false;
+        // Detect what exercise is actually being performed
+        actualExercise = detectActualExercise(features);
 
-        switch (currentExercise) {
-          case "GOBLET_SQUAT":
-            // Squat: check for vertical acceleration pattern
-            isValidRep = Math.abs(verticalAcc) > thresholds.MIN_AZ_AMPLITUDE;
-            break;
-
-          case "ARNOLD_PRESS":
-            // Arnold press: check for rotation component
-            isValidRep = axisRatios.gWRatio > 0.5;
-            break;
-
-          case "CROSSBODY_HAMMER":
-            // Crossbody: check for V-axis dominance
-            isValidRep = axisRatios.gVRatio > axisRatios.gURatio * 1.2;
-            break;
-
-          case "HAMMER_CURL":
-            // Hammer curl: V-axis should dominate
-            isValidRep = axisRatios.gVRatio > axisRatios.gURatio;
-            break;
-
-          case "NORMAL_CURL":
-            // Normal curl: U-axis should dominate
-            isValidRep = axisRatios.gURatio > axisRatios.gVRatio;
-            break;
-
-          default:
-            isValidRep = energy > thresholds.ENERGY_THRESH;
-        }
-
-        if (isValidRep) {
+        // Check if it's a valid exercise (not null)
+        if (actualExercise) {
           repDetected = true;
-          isGoodForm = checkGoodForm(features, currentExercise);
+
+          // Check if the actual exercise matches the selected exercise
+          isGoodForm = checkFormCorrectness(currentExercise, actualExercise);
+
           lastRepTime = timestamp;
 
           // Update stats for the selected exercise
@@ -432,6 +372,7 @@ function createExerciseDetector(selectedExercise) {
     return {
       repDetected,
       isGoodForm,
+      actualExercise,
       exerciseType: currentExercise,
     };
   }
@@ -449,6 +390,7 @@ function createExerciseDetector(selectedExercise) {
       value: features.gyroMag,
       repDetected: repResult.repDetected,
       isGoodForm: repResult.isGoodForm,
+      actualExercise: repResult.actualExercise,
       repType: currentExercise,
       exercise: currentExercise,
       exerciseStats: { ...exerciseStats },
@@ -457,7 +399,6 @@ function createExerciseDetector(selectedExercise) {
       gU: features.gU,
       gV: features.gV,
       gW: features.gW,
-      axisRatios: features.axisRatios,
       features,
       timestamp,
     };
@@ -465,11 +406,10 @@ function createExerciseDetector(selectedExercise) {
 
   function reset() {
     exerciseStats = {
-      NORMAL_CURL: { good: 0, bad: 0, total: 0 },
-      HAMMER_CURL: { good: 0, bad: 0, total: 0 },
-      CROSSBODY_HAMMER: { good: 0, bad: 0, total: 0 },
-      ARNOLD_PRESS: { good: 0, bad: 0, total: 0 },
-      GOBLET_SQUAT: { good: 0, bad: 0, total: 0 },
+      NORMAL_CURL: { total: 0, good: 0, bad: 0 },
+      CROSSBODY_HAMMER: { total: 0, good: 0, bad: 0 },
+      ARNOLD_PRESS: { total: 0, good: 0, bad: 0 },
+      GOBLET_SQUAT: { total: 0, good: 0, bad: 0 },
     };
     state = "IDLE";
     lastRepTime = 0;
@@ -479,16 +419,11 @@ function createExerciseDetector(selectedExercise) {
   function setExercise(exercise) {
     currentExercise = exercise;
     resetForNewExercise();
+    console.log(`Exercise set to: ${currentExercise}`);
   }
 
   function getExerciseStats() {
     return { ...exerciseStats };
-  }
-
-  function getCurrentExerciseStats() {
-    return currentExercise
-      ? exerciseStats[currentExercise]
-      : { good: 0, bad: 0, total: 0 };
   }
 
   return {
@@ -496,7 +431,6 @@ function createExerciseDetector(selectedExercise) {
     reset,
     setExercise,
     getExerciseStats,
-    getCurrentExerciseStats,
     getExercise: () => currentExercise,
   };
 }
@@ -509,7 +443,7 @@ function createCSVProcessor() {
   let currentIndex = 0;
   let detector = null;
 
-  function parseCSV(csvText, selectedExercise) {
+  function parseCSV(csvText) {
     const lines = csvText.split("\n");
     const headers = lines[0].split(",");
 
@@ -533,7 +467,7 @@ function createCSVProcessor() {
       });
 
     currentIndex = 0;
-    detector = createExerciseDetector(selectedExercise);
+    detector = createExerciseDetector();
   }
 
   function getNextSample() {
@@ -553,7 +487,8 @@ function createCSVProcessor() {
     log.push({
       ...sample,
       detectedRep: result.repDetected,
-      detectedExercise: result.exercise,
+      selectedExercise: result.exercise,
+      actualExercise: result.actualExercise,
       isGoodForm: result.isGoodForm,
       timestamp: Date.now(),
     });
@@ -578,26 +513,14 @@ function createCSVProcessor() {
     if (detector) detector.reset();
   }
 
-  function setExercise(exercise) {
-    if (detector) {
-      detector.setExercise(exercise);
-    }
-  }
-
-  return {
-    parseCSV,
-    getNextSample,
-    getAllData,
-    reset,
-    setExercise,
-  };
+  return { parseCSV, getNextSample, getAllData, reset };
 }
 
 /* ================= MAIN APP ================= */
 export default function DumbbellRepCounter() {
   // Refs for BLE and detector
-  const detectorRef = useRef(null);
-  const csvProcessorRef = useRef(null);
+  const detectorRef = useRef(createExerciseDetector());
+  const csvProcessorRef = useRef(createCSVProcessor());
   const deviceRef = useRef(null);
   const charRef = useRef(null);
   const rafRef = useRef(null);
@@ -607,15 +530,15 @@ export default function DumbbellRepCounter() {
   // Latest sensor data and detection results
   const latestRef = useRef({
     exerciseStats: {
-      NORMAL_CURL: { good: 0, bad: 0, total: 0 },
-      HAMMER_CURL: { good: 0, bad: 0, total: 0 },
-      CROSSBODY_HAMMER: { good: 0, bad: 0, total: 0 },
-      ARNOLD_PRESS: { good: 0, bad: 0, total: 0 },
-      GOBLET_SQUAT: { good: 0, bad: 0, total: 0 },
+      NORMAL_CURL: { total: 0, good: 0, bad: 0 },
+      CROSSBODY_HAMMER: { total: 0, good: 0, bad: 0 },
+      ARNOLD_PRESS: { total: 0, good: 0, bad: 0 },
+      GOBLET_SQUAT: { total: 0, good: 0, bad: 0 },
     },
     value: 0,
     repDetected: false,
     isGoodForm: false,
+    actualExercise: null,
     repType: null,
     exercise: null,
     state: "IDLE",
@@ -634,17 +557,15 @@ export default function DumbbellRepCounter() {
   const [isScanning, setIsScanning] = useState(false);
   const [dataRate, setDataRate] = useState(0);
   const [exerciseStats, setExerciseStats] = useState({
-    NORMAL_CURL: { good: 0, bad: 0, total: 0 },
-    HAMMER_CURL: { good: 0, bad: 0, total: 0 },
-    CROSSBODY_HAMMER: { good: 0, bad: 0, total: 0 },
-    ARNOLD_PRESS: { good: 0, bad: 0, total: 0 },
-    GOBLET_SQUAT: { good: 0, bad: 0, total: 0 },
+    NORMAL_CURL: { total: 0, good: 0, bad: 0 },
+    CROSSBODY_HAMMER: { total: 0, good: 0, bad: 0 },
+    ARNOLD_PRESS: { total: 0, good: 0, bad: 0 },
+    GOBLET_SQUAT: { total: 0, good: 0, bad: 0 },
   });
   const [currentExercise, setCurrentExercise] = useState(null);
   const [graphData, setGraphData] = useState([]);
   const [exerciseGraphs, setExerciseGraphs] = useState({
     NORMAL_CURL: [],
-    HAMMER_CURL: [],
     CROSSBODY_HAMMER: [],
     ARNOLD_PRESS: [],
     GOBLET_SQUAT: [],
@@ -652,56 +573,39 @@ export default function DumbbellRepCounter() {
   const [repMarks, setRepMarks] = useState([]);
   const [lastDataTime, setLastDataTime] = useState(null);
   const [dataCount, setDataCount] = useState(0);
+  const [showExerciseSelect, setShowExerciseSelect] = useState(true);
   const [csvMode, setCsvMode] = useState(false);
   const [csvFile, setCsvFile] = useState(null);
   const [processingCSV, setProcessingCSV] = useState(false);
   const [selectedGraph, setSelectedGraph] = useState("ALL");
-  const [showExerciseSelection, setShowExerciseSelection] = useState(true);
 
   // Data rate calculation
   const dataRateRef = useRef({ count: 0, lastCalc: Date.now() });
 
-  // Initialize detector when exercise is selected
-  useEffect(() => {
-    if (currentExercise) {
-      detectorRef.current = createExerciseDetector(currentExercise);
-      csvProcessorRef.current = createCSVProcessor();
-      setShowExerciseSelection(false);
-    }
-  }, [currentExercise]);
-
   /* ================= CSV HANDLING ================= */
-  const handleCSVUpload = useCallback(
-    (event) => {
-      const file = event.target.files[0];
-      if (!file) return;
+  const handleCSVUpload = useCallback((event) => {
+    const file = event.target.files[0];
+    if (!file) return;
 
-      if (!currentExercise) {
-        setError("Please select an exercise type first");
-        return;
+    setCsvFile(file);
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        csvProcessorRef.current.parseCSV(e.target.result);
+        setCsvMode(true);
+        setProcessingCSV(true);
+        setError(null);
+        console.log("CSV loaded successfully");
+      } catch (err) {
+        setError(`CSV parsing error: ${err.message}`);
       }
-
-      setCsvFile(file);
-
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          csvProcessorRef.current.parseCSV(e.target.result, currentExercise);
-          setCsvMode(true);
-          setProcessingCSV(true);
-          setError(null);
-          console.log("CSV loaded successfully");
-        } catch (err) {
-          setError(`CSV parsing error: ${err.message}`);
-        }
-      };
-      reader.readAsText(file);
-    },
-    [currentExercise],
-  );
+    };
+    reader.readAsText(file);
+  }, []);
 
   const processNextCSVSample = useCallback(() => {
-    if (!processingCSV || !csvProcessorRef.current) return;
+    if (!processingCSV) return;
 
     const result = csvProcessorRef.current.getNextSample();
 
@@ -722,7 +626,7 @@ export default function DumbbellRepCounter() {
 
     // Schedule next sample (simulate 100ms intervals as in your CSV)
     setTimeout(processNextCSVSample, 100);
-  }, [processingCSV]);
+  }, [processingCSV, setLastDataTime]);
 
   /* ================= BLE FUNCTIONS ================= */
   const connectBLE = useCallback(async () => {
@@ -850,8 +754,6 @@ export default function DumbbellRepCounter() {
             dataRateRef.current = { count: 0, lastCalc: now };
           }
 
-          if (!detectorRef.current) return;
-
           const result = detectorRef.current.update([gx, gy, gz], [ax, ay, az]);
 
           latestRef.current = {
@@ -877,8 +779,6 @@ export default function DumbbellRepCounter() {
               const gx = int16View[3] / 131.0;
               const gy = int16View[4] / 131.0;
               const gz = int16View[5] / 131.0;
-
-              if (!detectorRef.current) return;
 
               const result = detectorRef.current.update(
                 [gx, gy, gz],
@@ -923,7 +823,8 @@ export default function DumbbellRepCounter() {
         gx: entry.gx?.toFixed(4),
         gy: entry.gy?.toFixed(4),
         gz: entry.gz?.toFixed(4),
-        detectedExercise: entry.detectedExercise,
+        selectedExercise: entry.selectedExercise,
+        actualExercise: entry.actualExercise,
         isGoodForm: entry.isGoodForm ? "Good" : "Bad",
         groundTruth: entry.exercise,
       })),
@@ -937,43 +838,37 @@ export default function DumbbellRepCounter() {
         currentExercise ? exerciseNames[currentExercise] : "None",
       ],
       [],
-      ["Exercise", "Good Reps", "Bad Reps", "Total Reps"],
+      ["Exercise", "Total Reps", "Good Reps", "Bad Reps"],
       [
         "Normal Curls",
+        exerciseStats.NORMAL_CURL.total,
         exerciseStats.NORMAL_CURL.good,
         exerciseStats.NORMAL_CURL.bad,
-        exerciseStats.NORMAL_CURL.total,
-      ],
-      [
-        "Hammer Curls",
-        exerciseStats.HAMMER_CURL.good,
-        exerciseStats.HAMMER_CURL.bad,
-        exerciseStats.HAMMER_CURL.total,
       ],
       [
         "Crossbody Hammer",
+        exerciseStats.CROSSBODY_HAMMER.total,
         exerciseStats.CROSSBODY_HAMMER.good,
         exerciseStats.CROSSBODY_HAMMER.bad,
-        exerciseStats.CROSSBODY_HAMMER.total,
       ],
       [
         "Arnold Press",
+        exerciseStats.ARNOLD_PRESS.total,
         exerciseStats.ARNOLD_PRESS.good,
         exerciseStats.ARNOLD_PRESS.bad,
-        exerciseStats.ARNOLD_PRESS.total,
       ],
       [
         "Goblet Squat",
+        exerciseStats.GOBLET_SQUAT.total,
         exerciseStats.GOBLET_SQUAT.good,
         exerciseStats.GOBLET_SQUAT.bad,
-        exerciseStats.GOBLET_SQUAT.total,
       ],
       [],
       [
         "Total All Exercises",
+        Object.values(exerciseStats).reduce((sum, stat) => sum + stat.total, 0),
         Object.values(exerciseStats).reduce((sum, stat) => sum + stat.good, 0),
         Object.values(exerciseStats).reduce((sum, stat) => sum + stat.bad, 0),
-        Object.values(exerciseStats).reduce((sum, stat) => sum + stat.total, 0),
       ],
     ];
 
@@ -1014,23 +909,19 @@ export default function DumbbellRepCounter() {
   }, []);
 
   const resetCounts = useCallback(() => {
-    if (detectorRef.current) {
-      detectorRef.current.reset();
-    }
-    if (csvProcessorRef.current) {
-      csvProcessorRef.current.reset();
-    }
+    detectorRef.current.reset();
+    csvProcessorRef.current.reset();
     latestRef.current = {
       exerciseStats: {
-        NORMAL_CURL: { good: 0, bad: 0, total: 0 },
-        HAMMER_CURL: { good: 0, bad: 0, total: 0 },
-        CROSSBODY_HAMMER: { good: 0, bad: 0, total: 0 },
-        ARNOLD_PRESS: { good: 0, bad: 0, total: 0 },
-        GOBLET_SQUAT: { good: 0, bad: 0, total: 0 },
+        NORMAL_CURL: { total: 0, good: 0, bad: 0 },
+        CROSSBODY_HAMMER: { total: 0, good: 0, bad: 0 },
+        ARNOLD_PRESS: { total: 0, good: 0, bad: 0 },
+        GOBLET_SQUAT: { total: 0, good: 0, bad: 0 },
       },
       value: 0,
       repDetected: false,
       isGoodForm: false,
+      actualExercise: null,
       repType: null,
       exercise: currentExercise,
       state: "IDLE",
@@ -1042,16 +933,14 @@ export default function DumbbellRepCounter() {
     };
     startedRef.current = false;
     setExerciseStats({
-      NORMAL_CURL: { good: 0, bad: 0, total: 0 },
-      HAMMER_CURL: { good: 0, bad: 0, total: 0 },
-      CROSSBODY_HAMMER: { good: 0, bad: 0, total: 0 },
-      ARNOLD_PRESS: { good: 0, bad: 0, total: 0 },
-      GOBLET_SQUAT: { good: 0, bad: 0, total: 0 },
+      NORMAL_CURL: { total: 0, good: 0, bad: 0 },
+      CROSSBODY_HAMMER: { total: 0, good: 0, bad: 0 },
+      ARNOLD_PRESS: { total: 0, good: 0, bad: 0 },
+      GOBLET_SQUAT: { total: 0, good: 0, bad: 0 },
     });
     setGraphData([]);
     setExerciseGraphs({
       NORMAL_CURL: [],
-      HAMMER_CURL: [],
       CROSSBODY_HAMMER: [],
       ARNOLD_PRESS: [],
       GOBLET_SQUAT: [],
@@ -1066,19 +955,14 @@ export default function DumbbellRepCounter() {
 
   const setExercise = (exercise) => {
     setCurrentExercise(exercise);
-    if (detectorRef.current) {
-      detectorRef.current.setExercise(exercise);
-    }
-    if (csvProcessorRef.current) {
-      csvProcessorRef.current.setExercise(exercise);
-    }
+    detectorRef.current.setExercise(exercise);
+    setShowExerciseSelect(false);
     resetCounts();
   };
 
   const changeExercise = () => {
+    setShowExerciseSelect(true);
     setCurrentExercise(null);
-    setShowExerciseSelection(true);
-    resetCounts();
   };
 
   /* ================= UI UPDATE LOOP ================= */
@@ -1144,6 +1028,7 @@ export default function DumbbellRepCounter() {
               value: data.value,
               type: data.repType,
               isGoodForm: data.isGoodForm,
+              actualExercise: data.actualExercise,
             };
             return [...prev.slice(-30), newMark];
           });
@@ -1180,21 +1065,20 @@ export default function DumbbellRepCounter() {
 
   // Calculate totals
   const totalStats = {
+    total: Object.values(exerciseStats).reduce(
+      (sum, stat) => sum + stat.total,
+      0,
+    ),
     good: Object.values(exerciseStats).reduce(
       (sum, stat) => sum + stat.good,
       0,
     ),
     bad: Object.values(exerciseStats).reduce((sum, stat) => sum + stat.bad, 0),
-    total: Object.values(exerciseStats).reduce(
-      (sum, stat) => sum + stat.total,
-      0,
-    ),
   };
 
   // Exercise display names
   const exerciseNames = {
     NORMAL_CURL: "Normal Curl",
-    HAMMER_CURL: "Hammer Curl",
     CROSSBODY_HAMMER: "Crossbody Hammer",
     ARNOLD_PRESS: "Arnold Press",
     GOBLET_SQUAT: "Goblet Squat",
@@ -1203,19 +1087,10 @@ export default function DumbbellRepCounter() {
   // Exercise colors
   const exerciseColors = {
     NORMAL_CURL: "#4caf50",
-    HAMMER_CURL: "#ff9800",
     CROSSBODY_HAMMER: "#2196f3",
     ARNOLD_PRESS: "#9c27b0",
     GOBLET_SQUAT: "#009688",
   };
-
-  // Prepare data for bar chart
-  const barChartData = Object.keys(exerciseNames).map((exercise) => ({
-    name: exerciseNames[exercise],
-    good: exerciseStats[exercise].good,
-    bad: exerciseStats[exercise].bad,
-    color: exerciseColors[exercise],
-  }));
 
   // Get current graph data based on selection
   const getCurrentGraphData = () => {
@@ -1226,12 +1101,12 @@ export default function DumbbellRepCounter() {
   };
 
   /* ================= EXERCISE SELECTION SCREEN ================= */
-  if (showExerciseSelection) {
+  if (showExerciseSelect) {
     return (
       <div
         style={{
           padding: "40px",
-          width: "99vw",
+          width: "95vw",
           margin: "0 auto",
           fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
           backgroundColor: "#f5f5f5",
@@ -1259,7 +1134,8 @@ export default function DumbbellRepCounter() {
             🏋️‍♂️ Select Your Exercise
           </h1>
           <p style={{ color: "#666", fontSize: "18px", marginBottom: "40px" }}>
-            Choose the exercise you want to perform
+            Choose the exercise you want to perform. The system will detect if
+            you're doing it correctly.
           </p>
 
           <div
@@ -1323,8 +1199,6 @@ export default function DumbbellRepCounter() {
                 <p style={{ color: "#666", fontSize: "14px" }}>
                   {exercise === "NORMAL_CURL" &&
                     "Forearm rotation with palm-up grip"}
-                  {exercise === "HAMMER_CURL" &&
-                    "Neutral grip with vertical movement"}
                   {exercise === "CROSSBODY_HAMMER" &&
                     "Diagonal movement across body"}
                   {exercise === "ARNOLD_PRESS" && "Rotational shoulder press"}
@@ -1357,142 +1231,193 @@ export default function DumbbellRepCounter() {
   return (
     <div
       style={{
-        padding: "20px",
-        width: "90vw",
-        margin: "0 auto",
-        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-        backgroundColor: "#f5f5f5",
-        minHeight: "100vh",
+        height: "100vh",
+        width: "100vw",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
       }}
     >
       <div
         style={{
-          backgroundColor: "white",
-          borderRadius: "12px",
-          padding: "24px",
-          boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-          marginBottom: "24px",
+          padding: "20px",
+          width: "99%",
+          fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+          backgroundColor: "#f5f5f5",
+          height: "100%",
         }}
       >
-        {/* Header */}
         <div
           style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: "30px",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
-            <div
-              style={{
-                width: "80px",
-                height: "80px",
-                borderRadius: "10px",
-                overflow: "hidden",
-                border: `3px solid ${exerciseColors[currentExercise]}`,
-              }}
-            >
-              <img
-                src={exerciseImages[currentExercise]}
-                alt={exerciseNames[currentExercise]}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
-                }}
-              />
-            </div>
-            <div>
-              <h1 style={{ margin: 0, color: "#2c3e50", fontSize: "28px" }}>
-                {exerciseNames[currentExercise]}
-              </h1>
-              <p style={{ margin: "5px 0 0", color: "#666", fontSize: "14px" }}>
-                Real-time form analysis and rep counting
-              </p>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: "10px" }}>
-            <button
-              onClick={changeExercise}
-              style={{
-                padding: "10px 20px",
-                backgroundColor: "#ff9800",
-                color: "white",
-                border: "none",
-                borderRadius: "8px",
-                fontSize: "14px",
-                fontWeight: "500",
-                cursor: "pointer",
-              }}
-            >
-              🔄 Change Exercise
-            </button>
-            <button
-              onClick={exportToExcel}
-              style={{
-                padding: "10px 20px",
-                backgroundColor: "#4CAF50",
-                color: "white",
-                border: "none",
-                borderRadius: "8px",
-                fontSize: "14px",
-                fontWeight: "500",
-                cursor: "pointer",
-              }}
-            >
-              📊 Export Data
-            </button>
-          </div>
-        </div>
-
-        {/* Connection Controls */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "20px",
+            backgroundColor: "white",
+            borderRadius: "12px",
+            padding: "24px",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
             marginBottom: "24px",
-            flexWrap: "wrap",
           }}
         >
-          <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-            <button
-              onClick={connectBLE}
-              disabled={connected || isScanning || csvMode}
-              style={{
-                padding: "12px 24px",
-                backgroundColor: connected
-                  ? "#4CAF50"
-                  : isScanning
-                    ? "#FF9800"
-                    : "#2196F3",
-                color: "white",
-                border: "none",
-                borderRadius: "8px",
-                fontSize: "16px",
-                fontWeight: "500",
-                cursor:
-                  connected || isScanning || csvMode
-                    ? "not-allowed"
-                    : "pointer",
-                minWidth: "150px",
-                opacity: connected || isScanning || csvMode ? 0.8 : 1,
-              }}
-            >
-              {isScanning
-                ? "🔍 Scanning..."
-                : connected
-                  ? "✅ Connected"
-                  : "📡 Connect BLE"}
-            </button>
-
-            {connected && (
+          {/* Header with Exercise Image */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "30px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+              <div
+                style={{
+                  width: "80px",
+                  height: "80px",
+                  borderRadius: "10px",
+                  overflow: "hidden",
+                  border: `3px solid ${exerciseColors[currentExercise]}`,
+                }}
+              >
+                <img
+                  src={exerciseImages[currentExercise]}
+                  alt={exerciseNames[currentExercise]}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                  }}
+                />
+              </div>
+              <div>
+                <h1 style={{ margin: 0, color: "#2c3e50", fontSize: "28px" }}>
+                  {exerciseNames[currentExercise]}
+                </h1>
+                <p
+                  style={{ margin: "5px 0 0", color: "#666", fontSize: "14px" }}
+                >
+                  Form validation: Checking if you're doing the correct exercise
+                </p>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "10px" }}>
               <button
-                onClick={disconnectBLE}
+                onClick={changeExercise}
+                style={{
+                  padding: "10px 20px",
+                  backgroundColor: "#ff9800",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                }}
+              >
+                🔄 Change Exercise
+              </button>
+              <button
+                onClick={exportToExcel}
+                style={{
+                  padding: "10px 20px",
+                  backgroundColor: "#4CAF50",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                }}
+              >
+                📊 Export Data
+              </button>
+            </div>
+          </div>
+
+          {/* Connection Controls */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "20px",
+              marginBottom: "24px",
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+              <button
+                onClick={connectBLE}
+                disabled={connected || isScanning || csvMode}
                 style={{
                   padding: "12px 24px",
-                  backgroundColor: "#f44336",
+                  backgroundColor: connected
+                    ? "#4CAF50"
+                    : isScanning
+                      ? "#FF9800"
+                      : "#2196F3",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "16px",
+                  fontWeight: "500",
+                  cursor:
+                    connected || isScanning || csvMode
+                      ? "not-allowed"
+                      : "pointer",
+                  minWidth: "150px",
+                  opacity: connected || isScanning || csvMode ? 0.8 : 1,
+                }}
+              >
+                {isScanning
+                  ? "🔍 Scanning..."
+                  : connected
+                    ? "✅ Connected"
+                    : "📡 Connect BLE"}
+              </button>
+
+              {connected && (
+                <button
+                  onClick={disconnectBLE}
+                  style={{
+                    padding: "12px 24px",
+                    backgroundColor: "#f44336",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "8px",
+                    fontSize: "16px",
+                    fontWeight: "500",
+                    cursor: "pointer",
+                  }}
+                >
+                  Disconnect
+                </button>
+              )}
+
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handleCSVUpload}
+                style={{ display: "none" }}
+                id="csv-upload"
+              />
+              <label
+                htmlFor="csv-upload"
+                style={{
+                  padding: "12px 24px",
+                  backgroundColor: csvMode ? "#9c27b0" : "#673ab7",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "16px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                  display: "inline-block",
+                }}
+              >
+                {csvMode ? "📁 CSV Loaded" : "📁 Upload CSV"}
+              </label>
+
+              <button
+                onClick={resetCounts}
+                style={{
+                  padding: "12px 24px",
+                  backgroundColor: "#ff9800",
                   color: "white",
                   border: "none",
                   borderRadius: "8px",
@@ -1501,328 +1426,306 @@ export default function DumbbellRepCounter() {
                   cursor: "pointer",
                 }}
               >
-                Disconnect
+                🔄 Reset Counts
               </button>
-            )}
+            </div>
 
-            <input
-              type="file"
-              accept=".csv"
-              onChange={handleCSVUpload}
-              style={{ display: "none" }}
-              id="csv-upload"
-            />
-            <label
-              htmlFor="csv-upload"
+            <div
               style={{
-                padding: "12px 24px",
-                backgroundColor: csvMode ? "#9c27b0" : "#673ab7",
-                color: "white",
-                border: "none",
-                borderRadius: "8px",
-                fontSize: "16px",
-                fontWeight: "500",
-                cursor: "pointer",
-                display: "inline-block",
+                display: "flex",
+                gap: "20px",
+                alignItems: "center",
+                marginLeft: "auto",
               }}
             >
-              {csvMode ? "📁 CSV Loaded" : "📁 Upload CSV"}
-            </label>
+              {csvMode && (
+                <div
+                  style={{
+                    padding: "8px 16px",
+                    backgroundColor: "#9c27b0",
+                    borderRadius: "8px",
+                    fontSize: "14px",
+                    color: "white",
+                    fontWeight: "500",
+                  }}
+                >
+                  📊 CSV Mode
+                </div>
+              )}
 
-            <button
-              onClick={resetCounts}
+              {dataRate > 0 && (
+                <div
+                  style={{
+                    padding: "8px 16px",
+                    backgroundColor: "#e8f5e9",
+                    borderRadius: "8px",
+                    fontSize: "14px",
+                    color: "#2e7d32",
+                    fontWeight: "500",
+                  }}
+                >
+                  📊 {dataRate} Hz
+                </div>
+              )}
+
+              {lastDataTime && (
+                <div
+                  style={{
+                    padding: "8px 16px",
+                    backgroundColor: "#e3f2fd",
+                    borderRadius: "8px",
+                    fontSize: "14px",
+                    color: "#1565c0",
+                  }}
+                >
+                  ⏱️ Last:{" "}
+                  {new Date(lastDataTime).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Current Rep Feedback */}
+          {latestRef.current.repDetected && (
+            <div
               style={{
-                padding: "12px 24px",
-                backgroundColor: "#ff9800",
-                color: "white",
-                border: "none",
-                borderRadius: "8px",
-                fontSize: "16px",
-                fontWeight: "500",
-                cursor: "pointer",
+                backgroundColor: latestRef.current.isGoodForm
+                  ? "#e8f5e9"
+                  : "#ffebee",
+                borderRadius: "10px",
+                padding: "15px",
+                marginBottom: "20px",
+                border: `2px solid ${latestRef.current.isGoodForm ? "#4CAF50" : "#f44336"}`,
+                textAlign: "center",
               }}
             >
-              🔄 Reset Counts
-            </button>
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              gap: "20px",
-              alignItems: "center",
-              marginLeft: "auto",
-            }}
-          >
-            {csvMode && (
               <div
                 style={{
-                  padding: "8px 16px",
-                  backgroundColor: "#9c27b0",
-                  borderRadius: "8px",
-                  fontSize: "14px",
-                  color: "white",
-                  fontWeight: "500",
+                  fontSize: "16px",
+                  fontWeight: "600",
+                  color: latestRef.current.isGoodForm ? "#2e7d32" : "#c62828",
                 }}
               >
-                📊 CSV Mode
+                {latestRef.current.isGoodForm ? "✓ GOOD REP!" : "✗ BAD REP!"}
               </div>
-            )}
-
-            {dataRate > 0 && (
               <div
-                style={{
-                  padding: "8px 16px",
-                  backgroundColor: "#e8f5e9",
-                  borderRadius: "8px",
-                  fontSize: "14px",
-                  color: "#2e7d32",
-                  fontWeight: "500",
-                }}
+                style={{ fontSize: "14px", color: "#666", marginTop: "5px" }}
               >
-                📊 {dataRate} Hz
+                {latestRef.current.isGoodForm
+                  ? "You're doing the correct exercise!"
+                  : `You're doing ${exerciseNames[latestRef.current.actualExercise]} instead of ${exerciseNames[currentExercise]}`}
               </div>
-            )}
+            </div>
+          )}
 
-            {lastDataTime && (
-              <div
-                style={{
-                  padding: "8px 16px",
-                  backgroundColor: "#e3f2fd",
-                  borderRadius: "8px",
-                  fontSize: "14px",
-                  color: "#1565c0",
-                }}
-              >
-                ⏱️ Last:{" "}
-                {new Date(lastDataTime).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  second: "2-digit",
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Current Exercise Stats */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-            gap: "20px",
-            marginBottom: "30px",
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: "#4CAF50",
-              borderRadius: "10px",
-              padding: "20px",
-              textAlign: "center",
-              color: "white",
-            }}
-          >
-            <div style={{ fontSize: "14px", marginBottom: "8px" }}>
-              GOOD REPS
-            </div>
-            <div style={{ fontSize: "36px", fontWeight: "700" }}>
-              {exerciseStats[currentExercise]?.good || 0}
-            </div>
-            <div style={{ fontSize: "12px", opacity: 0.9 }}>
-              Proper form detected
-            </div>
-          </div>
-
-          <div
-            style={{
-              backgroundColor: "#f44336",
-              borderRadius: "10px",
-              padding: "20px",
-              textAlign: "center",
-              color: "white",
-            }}
-          >
-            <div style={{ fontSize: "14px", marginBottom: "8px" }}>
-              BAD REPS
-            </div>
-            <div style={{ fontSize: "36px", fontWeight: "700" }}>
-              {exerciseStats[currentExercise]?.bad || 0}
-            </div>
-            <div style={{ fontSize: "12px", opacity: 0.9 }}>
-              Form needs improvement
-            </div>
-          </div>
-
-          <div
-            style={{
-              backgroundColor: "#2196F3",
-              borderRadius: "10px",
-              padding: "20px",
-              textAlign: "center",
-              color: "white",
-            }}
-          >
-            <div style={{ fontSize: "14px", marginBottom: "8px" }}>
-              TOTAL REPS
-            </div>
-            <div style={{ fontSize: "36px", fontWeight: "700" }}>
-              {exerciseStats[currentExercise]?.total || 0}
-            </div>
-            <div style={{ fontSize: "12px", opacity: 0.9 }}>Combined count</div>
-          </div>
-
-          <div
-            style={{
-              backgroundColor: "#FF9800",
-              borderRadius: "10px",
-              padding: "20px",
-              textAlign: "center",
-              color: "white",
-            }}
-          >
-            <div style={{ fontSize: "14px", marginBottom: "8px" }}>
-              SUCCESS RATE
-            </div>
-            <div style={{ fontSize: "36px", fontWeight: "700" }}>
-              {exerciseStats[currentExercise]?.total > 0
-                ? `${Math.round(
-                    (exerciseStats[currentExercise].good /
-                      exerciseStats[currentExercise].total) *
-                      100,
-                  )}%`
-                : "0%"}
-            </div>
-            <div style={{ fontSize: "12px", opacity: 0.9 }}>
-              Good form percentage
-            </div>
-          </div>
-        </div>
-
-        {/* All Exercises Summary */}
-        <div
-          style={{
-            backgroundColor: "#f8f9fa",
-            borderRadius: "10px",
-            padding: "20px",
-            marginBottom: "30px",
-          }}
-        >
-          <h3 style={{ margin: "0 0 20px 0", color: "#2c3e50" }}>
-            📊 All Exercises Summary
-          </h3>
+          {/* Current Exercise Stats */}
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-              gap: "15px",
+              gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+              gap: "20px",
+              marginBottom: "30px",
             }}
           >
-            {Object.keys(exerciseNames).map((exercise) => (
-              <div
-                key={exercise}
-                style={{
-                  backgroundColor: "white",
-                  borderRadius: "8px",
-                  padding: "15px",
-                  borderLeft: `4px solid ${exerciseColors[exercise]}`,
-                  boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "12px",
-                    color: exerciseColors[exercise],
-                    fontWeight: "600",
-                    marginBottom: "5px",
-                  }}
-                >
-                  {exerciseNames[exercise]}
-                </div>
-                <div
-                  style={{ display: "flex", justifyContent: "space-between" }}
-                >
-                  <div>
-                    <div style={{ fontSize: "10px", color: "#666" }}>Good</div>
-                    <div
-                      style={{
-                        fontSize: "16px",
-                        fontWeight: "600",
-                        color: "#4CAF50",
-                      }}
-                    >
-                      {exerciseStats[exercise].good}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "10px", color: "#666" }}>Bad</div>
-                    <div
-                      style={{
-                        fontSize: "16px",
-                        fontWeight: "600",
-                        color: "#f44336",
-                      }}
-                    >
-                      {exerciseStats[exercise].bad}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "10px", color: "#666" }}>Total</div>
-                    <div
-                      style={{
-                        fontSize: "16px",
-                        fontWeight: "600",
-                        color: "#2196F3",
-                      }}
-                    >
-                      {exerciseStats[exercise].total}
-                    </div>
-                  </div>
-                </div>
+            <div
+              style={{
+                backgroundColor: "#4CAF50",
+                borderRadius: "10px",
+                padding: "20px",
+                textAlign: "center",
+                color: "white",
+              }}
+            >
+              <div style={{ fontSize: "14px", marginBottom: "8px" }}>
+                TOTAL REPS
               </div>
-            ))}
-          </div>
-        </div>
+              <div style={{ fontSize: "36px", fontWeight: "700" }}>
+                {exerciseStats[currentExercise]?.total || 0}
+              </div>
+              <div style={{ fontSize: "12px", opacity: 0.9 }}>
+                All counted reps
+              </div>
+            </div>
 
-        {/* Graph Selection */}
-        {graphData.length > 0 && (
-          <>
-            <div style={{ marginBottom: "16px" }}>
-              <div
-                style={{
-                  display: "flex",
-                  gap: "10px",
-                  flexWrap: "wrap",
-                  marginBottom: "16px",
-                }}
-              >
-                <button
-                  onClick={() => setSelectedGraph("ALL")}
+            <div
+              style={{
+                backgroundColor: "#2196F3",
+                borderRadius: "10px",
+                padding: "20px",
+                textAlign: "center",
+                color: "white",
+              }}
+            >
+              <div style={{ fontSize: "14px", marginBottom: "8px" }}>
+                GOOD REPS
+              </div>
+              <div style={{ fontSize: "36px", fontWeight: "700" }}>
+                {exerciseStats[currentExercise]?.good || 0}
+              </div>
+              <div style={{ fontSize: "12px", opacity: 0.9 }}>
+                Correct exercise performed
+              </div>
+            </div>
+
+            <div
+              style={{
+                backgroundColor: "#f44336",
+                borderRadius: "10px",
+                padding: "20px",
+                textAlign: "center",
+                color: "white",
+              }}
+            >
+              <div style={{ fontSize: "14px", marginBottom: "8px" }}>
+                BAD REPS
+              </div>
+              <div style={{ fontSize: "36px", fontWeight: "700" }}>
+                {exerciseStats[currentExercise]?.bad || 0}
+              </div>
+              <div style={{ fontSize: "12px", opacity: 0.9 }}>
+                Wrong exercise performed
+              </div>
+            </div>
+
+            <div
+              style={{
+                backgroundColor: "#FF9800",
+                borderRadius: "10px",
+                padding: "20px",
+                textAlign: "center",
+                color: "white",
+              }}
+            >
+              <div style={{ fontSize: "14px", marginBottom: "8px" }}>
+                SUCCESS RATE
+              </div>
+              <div style={{ fontSize: "36px", fontWeight: "700" }}>
+                {exerciseStats[currentExercise]?.total > 0
+                  ? `${Math.round(
+                      (exerciseStats[currentExercise].good /
+                        exerciseStats[currentExercise].total) *
+                        100,
+                    )}%`
+                  : "0%"}
+              </div>
+              <div style={{ fontSize: "12px", opacity: 0.9 }}>
+                Correct exercise percentage
+              </div>
+            </div>
+          </div>
+
+          {/* All Exercises Summary */}
+          <div
+            style={{
+              backgroundColor: "#f8f9fa",
+              borderRadius: "10px",
+              padding: "20px",
+              marginBottom: "30px",
+            }}
+          >
+            <h3 style={{ margin: "0 0 20px 0", color: "#2c3e50" }}>
+              📊 All Exercises Summary
+            </h3>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                gap: "15px",
+              }}
+            >
+              {Object.keys(exerciseNames).map((exercise) => (
+                <div
+                  key={exercise}
                   style={{
-                    padding: "8px 16px",
-                    backgroundColor:
-                      selectedGraph === "ALL" ? "#2196F3" : "#e0e0e0",
-                    color: selectedGraph === "ALL" ? "white" : "#333",
-                    border: "none",
-                    borderRadius: "6px",
-                    fontSize: "14px",
-                    fontWeight: "500",
-                    cursor: "pointer",
+                    backgroundColor: "white",
+                    borderRadius: "8px",
+                    padding: "15px",
+                    borderLeft: `4px solid ${exerciseColors[exercise]}`,
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
                   }}
                 >
-                  All Data
-                </button>
-                {Object.keys(exerciseNames).map((exercise) => (
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: exerciseColors[exercise],
+                      fontWeight: "600",
+                      marginBottom: "5px",
+                    }}
+                  >
+                    {exerciseNames[exercise]}
+                  </div>
+                  <div
+                    style={{ display: "flex", justifyContent: "space-between" }}
+                  >
+                    <div>
+                      <div style={{ fontSize: "10px", color: "#666" }}>
+                        Total
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "16px",
+                          fontWeight: "600",
+                          color: "#4CAF50",
+                        }}
+                      >
+                        {exerciseStats[exercise].total}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "10px", color: "#666" }}>
+                        Good
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "16px",
+                          fontWeight: "600",
+                          color: "#2196F3",
+                        }}
+                      >
+                        {exerciseStats[exercise].good}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "10px", color: "#666" }}>Bad</div>
+                      <div
+                        style={{
+                          fontSize: "16px",
+                          fontWeight: "600",
+                          color: "#f44336",
+                        }}
+                      >
+                        {exerciseStats[exercise].bad}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Graph Selection */}
+          {graphData.length > 0 && (
+            <>
+              <div style={{ marginBottom: "16px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "10px",
+                    flexWrap: "wrap",
+                    marginBottom: "16px",
+                  }}
+                >
                   <button
-                    key={exercise}
-                    onClick={() => setSelectedGraph(exercise)}
+                    onClick={() => setSelectedGraph("ALL")}
                     style={{
                       padding: "8px 16px",
                       backgroundColor:
-                        selectedGraph === exercise
-                          ? exerciseColors[exercise]
-                          : "#e0e0e0",
-                      color: selectedGraph === exercise ? "white" : "#333",
+                        selectedGraph === "ALL" ? "#2196F3" : "#e0e0e0",
+                      color: selectedGraph === "ALL" ? "white" : "#333",
                       border: "none",
                       borderRadius: "6px",
                       fontSize: "14px",
@@ -1830,210 +1733,231 @@ export default function DumbbellRepCounter() {
                       cursor: "pointer",
                     }}
                   >
-                    {exerciseNames[exercise]}
+                    All Data
+                  </button>
+                  {Object.keys(exerciseNames).map((exercise) => (
+                    <button
+                      key={exercise}
+                      onClick={() => setSelectedGraph(exercise)}
+                      style={{
+                        padding: "8px 16px",
+                        backgroundColor:
+                          selectedGraph === exercise
+                            ? exerciseColors[exercise]
+                            : "#e0e0e0",
+                        color: selectedGraph === exercise ? "white" : "#333",
+                        border: "none",
+                        borderRadius: "6px",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {exerciseNames[exercise]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Graph */}
+              <div
+                style={{
+                  backgroundColor: "white",
+                  padding: "20px",
+                  borderRadius: "12px",
+                  boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
+                  marginBottom: "24px",
+                }}
+              >
+                <div style={{ width: "100%", height: "300px" }}>
+                  <ResponsiveContainer>
+                    <LineChart data={getCurrentGraphData()}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                      <XAxis
+                        dataKey="time"
+                        domain={["dataMin", "dataMax"]}
+                        tickFormatter={(unixTime) => {
+                          const date = new Date(unixTime);
+                          return `${date
+                            .getSeconds()
+                            .toString()
+                            .padStart(2, "0")}.${Math.floor(
+                            date.getMilliseconds() / 100,
+                          )}`;
+                        }}
+                        stroke="#666"
+                      />
+                      <YAxis stroke="#666" />
+                      <Tooltip
+                        labelFormatter={(label) =>
+                          new Date(label).toLocaleTimeString()
+                        }
+                        formatter={(value, name) => [value.toFixed(3), name]}
+                        contentStyle={{
+                          backgroundColor: "white",
+                          border: "1px solid #ccc",
+                          borderRadius: "8px",
+                        }}
+                      />
+                      <Legend />
+                      <Line
+                        type="monotone"
+                        dataKey="value"
+                        stroke="#8884d8"
+                        strokeWidth={2}
+                        dot={false}
+                        isAnimationActive={false}
+                        name="Gyro Magnitude"
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="gU"
+                        stroke="#82ca9d"
+                        strokeWidth={1}
+                        dot={false}
+                        isAnimationActive={false}
+                        name="U Axis"
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="gV"
+                        stroke="#ffc658"
+                        strokeWidth={1}
+                        dot={false}
+                        isAnimationActive={false}
+                        name="V Axis"
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="gW"
+                        stroke="#ff6b6b"
+                        strokeWidth={1}
+                        dot={false}
+                        isAnimationActive={false}
+                        name="W Axis"
+                      />
+                      {repMarks.map((mark, index) => (
+                        <ReferenceLine
+                          key={index}
+                          x={mark.time}
+                          stroke={mark.isGoodForm ? "#4CAF50" : "#f44336"}
+                          strokeWidth={2}
+                          strokeDasharray="3 3"
+                          label={{
+                            value: mark.isGoodForm ? "✓" : "✗",
+                            position: "top",
+                            fill: mark.isGoodForm ? "#4CAF50" : "#f44336",
+                            fontSize: "16px",
+                          }}
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Services and Characteristics */}
+          {services.length > 0 && (
+            <div style={{ marginBottom: "32px" }}>
+              <h3 style={{ color: "#2c3e50", marginBottom: "16px" }}>
+                📡 Available Services ({services.length})
+              </h3>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "10px",
+                  marginBottom: "24px",
+                }}
+              >
+                {services.map((service) => (
+                  <button
+                    key={service.uuid}
+                    onClick={() => selectService(service)}
+                    style={{
+                      padding: "10px 16px",
+                      backgroundColor: "#e3f2fd",
+                      border: "none",
+                      borderRadius: "6px",
+                      fontSize: "12px",
+                      fontWeight: "500",
+                      cursor: "pointer",
+                      color: "#1565c0",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      maxWidth: "200px",
+                    }}
+                    title={service.uuid}
+                  >
+                    {service.uuid.substring(0, 8)}...
                   </button>
                 ))}
               </div>
             </div>
+          )}
 
-            {/* Graph */}
-            <div
-              style={{
-                backgroundColor: "white",
-                padding: "20px",
-                borderRadius: "12px",
-                boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
-                marginBottom: "24px",
-              }}
-            >
-              <div style={{ width: "100%", height: "300px" }}>
-                <ResponsiveContainer>
-                  <LineChart data={getCurrentGraphData()}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                    <XAxis
-                      dataKey="time"
-                      domain={["dataMin", "dataMax"]}
-                      tickFormatter={(unixTime) => {
-                        const date = new Date(unixTime);
-                        return `${date
-                          .getSeconds()
-                          .toString()
-                          .padStart(2, "0")}.${Math.floor(
-                          date.getMilliseconds() / 100,
-                        )}`;
-                      }}
-                      stroke="#666"
-                    />
-                    <YAxis stroke="#666" />
-                    <Tooltip
-                      labelFormatter={(label) =>
-                        new Date(label).toLocaleTimeString()
-                      }
-                      formatter={(value, name) => [value.toFixed(3), name]}
-                      contentStyle={{
-                        backgroundColor: "white",
-                        border: "1px solid #ccc",
-                        borderRadius: "8px",
-                      }}
-                    />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="value"
-                      stroke="#8884d8"
-                      strokeWidth={2}
-                      dot={false}
-                      isAnimationActive={false}
-                      name="Gyro Magnitude"
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="gU"
-                      stroke="#82ca9d"
-                      strokeWidth={1}
-                      dot={false}
-                      isAnimationActive={false}
-                      name="U Axis"
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="gV"
-                      stroke="#ffc658"
-                      strokeWidth={1}
-                      dot={false}
-                      isAnimationActive={false}
-                      name="V Axis"
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="gW"
-                      stroke="#ff6b6b"
-                      strokeWidth={1}
-                      dot={false}
-                      isAnimationActive={false}
-                      name="W Axis"
-                    />
-                    {repMarks.map((mark, index) => (
-                      <ReferenceLine
-                        key={index}
-                        x={mark.time}
-                        stroke={mark.isGoodForm ? "#4CAF50" : "#f44336"}
-                        strokeWidth={2}
-                        strokeDasharray="3 3"
-                        label={{
-                          value: mark.isGoodForm ? "✓" : "✗",
-                          position: "top",
-                          fill: mark.isGoodForm ? "#4CAF50" : "#f44336",
-                          fontSize: "16px",
-                        }}
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
+          {characteristics.length > 0 && (
+            <div style={{ marginBottom: "32px" }}>
+              <h3 style={{ color: "#2c3e50", marginBottom: "16px" }}>
+                🔔 Notify Characteristics ({characteristics.length})
+              </h3>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "10px",
+                }}
+              >
+                {characteristics.map((characteristic) => (
+                  <button
+                    key={characteristic.uuid}
+                    onClick={() => subscribeCharacteristic(characteristic)}
+                    style={{
+                      padding: "10px 16px",
+                      backgroundColor: "#f3e5f5",
+                      border: "none",
+                      borderRadius: "6px",
+                      fontSize: "12px",
+                      fontWeight: "500",
+                      cursor: "pointer",
+                      color: "#7b1fa2",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      maxWidth: "200px",
+                    }}
+                    title={`${characteristic.uuid}\nProperties: ${Object.keys(
+                      characteristic.properties,
+                    )
+                      .filter((k) => characteristic.properties[k])
+                      .join(", ")}`}
+                  >
+                    {characteristic.uuid.substring(0, 8)}...
+                  </button>
+                ))}
               </div>
             </div>
-          </>
-        )}
+          )}
 
-        {/* Services and Characteristics */}
-        {services.length > 0 && (
-          <div style={{ marginBottom: "32px" }}>
-            <h3 style={{ color: "#2c3e50", marginBottom: "16px" }}>
-              📡 Available Services ({services.length})
-            </h3>
+          {/* Error Display */}
+          {error && (
             <div
               style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "10px",
-                marginBottom: "24px",
+                backgroundColor: "#ffebee",
+                color: "#c62828",
+                padding: "12px 16px",
+                borderRadius: "8px",
+                marginTop: "20px",
+                border: "1px solid #ffcdd2",
               }}
             >
-              {services.map((service) => (
-                <button
-                  key={service.uuid}
-                  onClick={() => selectService(service)}
-                  style={{
-                    padding: "10px 16px",
-                    backgroundColor: "#e3f2fd",
-                    border: "none",
-                    borderRadius: "6px",
-                    fontSize: "12px",
-                    fontWeight: "500",
-                    cursor: "pointer",
-                    color: "#1565c0",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    maxWidth: "200px",
-                  }}
-                  title={service.uuid}
-                >
-                  {service.uuid.substring(0, 8)}...
-                </button>
-              ))}
+              <strong>Error:</strong> {error}
             </div>
-          </div>
-        )}
-
-        {characteristics.length > 0 && (
-          <div style={{ marginBottom: "32px" }}>
-            <h3 style={{ color: "#2c3e50", marginBottom: "16px" }}>
-              🔔 Notify Characteristics ({characteristics.length})
-            </h3>
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "10px",
-              }}
-            >
-              {characteristics.map((characteristic) => (
-                <button
-                  key={characteristic.uuid}
-                  onClick={() => subscribeCharacteristic(characteristic)}
-                  style={{
-                    padding: "10px 16px",
-                    backgroundColor: "#f3e5f5",
-                    border: "none",
-                    borderRadius: "6px",
-                    fontSize: "12px",
-                    fontWeight: "500",
-                    cursor: "pointer",
-                    color: "#7b1fa2",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    maxWidth: "200px",
-                  }}
-                  title={`${characteristic.uuid}\nProperties: ${Object.keys(
-                    characteristic.properties,
-                  )
-                    .filter((k) => characteristic.properties[k])
-                    .join(", ")}`}
-                >
-                  {characteristic.uuid.substring(0, 8)}...
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Error Display */}
-        {error && (
-          <div
-            style={{
-              backgroundColor: "#ffebee",
-              color: "#c62828",
-              padding: "12px 16px",
-              borderRadius: "8px",
-              marginTop: "20px",
-              border: "1px solid #ffcdd2",
-            }}
-          >
-            <strong>Error:</strong> {error}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
