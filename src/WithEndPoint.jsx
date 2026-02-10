@@ -34,6 +34,7 @@ function WithEndPoint() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(2000);
   const [history, setHistory] = useState([]);
+  const [countData, setCountData] = useState(null);
   const [graphData, setGraphData] = useState({
     accel: { labels: [], datasets: [] },
     gyro: { labels: [], datasets: [] },
@@ -112,7 +113,7 @@ function WithEndPoint() {
       if (data.samples?.[0]) {
         updateGraphData(newHistory);
       }
-      
+
       setError(null); // Clear any previous errors on successful fetch
     } catch (err) {
       console.error("Failed to fetch sensor data:", err);
@@ -120,6 +121,26 @@ function WithEndPoint() {
       // Only set error for connection-related failures
     } finally {
       setLoading(false);
+    }
+  };
+
+  const GetCountData = async (reset = false) => {
+    try {
+      const response = await fetch(
+        `http://192.168.0.17:8000/count?reset=${reset}`,
+      );
+      if (!response.ok)
+        throw new Error(`HTTP error! Status: ${response.status}`);
+
+      const data = await response.json();
+      setCountData(data);
+      console.log("Count data:", data);
+    } catch (err) {
+      console.error("Failed to fetch sensor data:", err);
+      // Don't show alert or set error for fetch failures
+      // Only set error for connection-related failures
+    } finally {
+      // setLoading(false);
     }
   };
 
@@ -144,7 +165,7 @@ function WithEndPoint() {
   const ConnectBle = async () => {
     setLoading(true);
     setError(null); // Clear previous errors
-    
+
     try {
       // Step 1: Send connect request
       const response = await fetch("http://192.168.0.17:8000/connect", {
@@ -153,24 +174,24 @@ function WithEndPoint() {
           "Content-Type": "application/json",
         },
       });
-      
+
       if (!response.ok) {
         throw new Error(`Connection request failed: ${response.status}`);
       }
 
       // Step 2: Wait a moment for connection to establish
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
       // Step 3: Check if connection succeeded
       const isConnected = await checkStatus();
-      
+
       if (!isConnected) {
         throw new Error("Connection attempt failed. Please try again.");
       }
-      
+
       // Step 4: Start fetching data once connected
       await fetchData();
-      
+      await GetCountData();
     } catch (err) {
       setError(`Failed to connect: ${err.message}`);
       setConnected(false);
@@ -182,7 +203,7 @@ function WithEndPoint() {
   const DisConnectBle = async () => {
     setLoading(true);
     setError(null); // Clear previous errors
-    
+
     try {
       // Step 1: Send disconnect request
       const response = await fetch("http://192.168.0.17:8000/disconnect", {
@@ -191,26 +212,26 @@ function WithEndPoint() {
           "Content-Type": "application/json",
         },
       });
-      
+
       if (!response.ok) {
         throw new Error(`Disconnect request failed: ${response.status}`);
       }
 
       // Step 2: Wait a moment for disconnection to complete
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
       // Step 3: Verify disconnection
       const isConnected = await checkStatus();
-      
+
       if (isConnected) {
         throw new Error("Failed to disconnect from device");
       }
-      
+
       // Step 4: Clear sensor data when disconnected
       setSensorData(null);
+      setCountData(null);
       setHistory([]);
       historyRef.current = [];
-      
     } catch (err) {
       setError(`Failed to disconnect: ${err.message}`);
     } finally {
@@ -308,14 +329,16 @@ function WithEndPoint() {
   useEffect(() => {
     // Initial status check
     // checkStatus();
-    
     // Initial data fetch
     // fetchData();
   }, []);
 
   useEffect(() => {
     if (autoRefresh && connected) {
-      const interval = setInterval(fetchData, refreshInterval);
+      const interval = setInterval(() => {
+        fetchData();
+        GetCountData();
+      }, refreshInterval);
       return () => clearInterval(interval);
     }
   }, [autoRefresh, refreshInterval, connected]);
@@ -356,7 +379,11 @@ function WithEndPoint() {
     return (
       <div className="loading-screen  text-center">
         <div className="spinner"></div>
-        <p>{connected ? "Fetching sensor data..." : "Connecting to IMU Sensor..."}</p>
+        <p>
+          {connected
+            ? "Fetching sensor data..."
+            : "Connecting to IMU Sensor..."}
+        </p>
       </div>
     );
   }
@@ -413,8 +440,11 @@ function WithEndPoint() {
             </div>
 
             <div className="controls">
-              <button 
-                onClick={fetchData} 
+              <button
+                onClick={() => {
+                  fetchData();
+                  GetCountData();
+                }}
                 className="btn btn-primary"
                 disabled={!connected || loading}
               >
@@ -451,10 +481,7 @@ function WithEndPoint() {
           <div className="error-banner">
             <i className="fas fa-exclamation-triangle"></i>
             <span>{error}</span>
-            <button 
-              className="error-close" 
-              onClick={() => setError(null)}
-            >
+            <button className="error-close" onClick={() => setError(null)}>
               ×
             </button>
           </div>
@@ -469,291 +496,347 @@ function WithEndPoint() {
         )}
 
         {/* Main Dashboard - Only show when connected */}
-        {!connected && (
-          <div className="dashboard">
-            {/* Prediction Card */}
+        {/* {!connected && ( */}
+        <div
+          className="stat-cards"
+          style={{
+            display: "flex",
+            gap: "12px",
+            marginTop: "12px",
+            marginBottom: "12px",
+          }}
+        >
+          <div
+            className="stat-card card"
+            style={{ padding: "12px", flex: 1, textAlign: "center" }}
+          >
+            <div className="stat-label">Reps</div>
             <div
-              className="card prediction-card text-center"
-              style={{ width: "100%" }}
+              className="stat-value"
+              style={{ fontSize: "1.5rem", fontWeight: "700" }}
             >
-              <div className="card-header">
-                <h2>
-                  <i className="fas fa-chart-line"></i> Current Prediction
-                </h2>
+              {countData?.rep_count ?? 0}
+            </div>
+          </div>
+
+          <div
+            className="stat-card card"
+            style={{ padding: "12px", flex: 1, textAlign: "center" }}
+          >
+            <div className="stat-label">Bad Reps</div>
+            <div
+              className="stat-value"
+              style={{ fontSize: "1.5rem", fontWeight: "700" }}
+            >
+              {countData?.bad_rep_count ?? 0}
+            </div>
+          </div>
+
+          <div
+            className="stat-card card"
+            style={{ padding: "12px", flex: 1, textAlign: "center" }}
+          >
+            <div className="stat-label">Total Reps</div>
+            <div
+              className="stat-value"
+              style={{ fontSize: "1.5rem", fontWeight: "700" }}
+            >
+              {countData?.total_reps ?? 0}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <button
+              onClick={() => GetCountData(true)}
+              className="btn btn-secondary"
+            >
+              <i className="fas fa-undo"></i> Reset Count
+            </button>
+          </div>
+        </div>
+        <div className="dashboard">
+          {/* Prediction Card */}
+          <div
+            className="card prediction-card text-center"
+            style={{ width: "100%" }}
+          >
+            <div className="card-header">
+              <h2>
+                <i className="fas fa-chart-line"></i> Current Prediction
+              </h2>
+              <div
+                className={`status-badge ${sensorData?.latest_is_rest ? "rest" : "active"}`}
+              >
+                {sensorData?.latest_is_rest ? "RESTING" : "ACTIVE"}
+              </div>
+            </div>
+
+            <div className="prediction-content">
+              <div className="prediction-icon">{currentConfig?.icon}</div>
+              <div className="prediction-details">
+                <div className="prediction-name">{currentConfig?.label}</div>
                 <div
-                  className={`status-badge ${sensorData?.latest_is_rest ? "rest" : "active"}`}
+                  className="prediction-value"
+                  style={{ color: currentConfig?.color }}
                 >
-                  {sensorData?.latest_is_rest ? "RESTING" : "ACTIVE"}
+                  {sensorData?.latest_prediction
+                    ?.toUpperCase()
+                    ?.replace("_", " ") || "UNKNOWN"}
                 </div>
               </div>
 
-              <div className="prediction-content">
-                <div className="prediction-icon">{currentConfig?.icon}</div>
-                <div className="prediction-details">
-                  <div className="prediction-name">{currentConfig?.label}</div>
-                  <div
-                    className="prediction-value"
-                    style={{ color: currentConfig?.color }}
+              <div className="confidence-section">
+                <div className="confidence-header">
+                  <span>Confidence</span>
+                  <span
+                    className="confidence-percent"
+                    style={{
+                      color:
+                        confidencePercent > 80
+                          ? "#10B981"
+                          : confidencePercent > 60
+                            ? "#F59E0B"
+                            : "#EF4444",
+                    }}
                   >
-                    {sensorData?.latest_prediction
-                      ?.toUpperCase()
-                      ?.replace("_", " ") || "UNKNOWN"}
-                  </div>
+                    {confidencePercent}%
+                  </span>
                 </div>
-
-                <div className="confidence-section">
-                  <div className="confidence-header">
-                    <span>Confidence</span>
-                    <span
-                      className="confidence-percent"
-                      style={{
-                        color:
-                          confidencePercent > 80
-                            ? "#10B981"
-                            : confidencePercent > 60
-                              ? "#F59E0B"
-                              : "#EF4444",
-                      }}
-                    >
-                      {confidencePercent}%
-                    </span>
-                  </div>
-                  <div className="confidence-bar">
-                    <div
-                      className="confidence-fill"
-                      style={{
-                        width: `${confidencePercent}%`,
-                        backgroundColor:
-                          confidencePercent > 80
-                            ? "#10B981"
-                            : confidencePercent > 60
-                              ? "#F59E0B"
-                              : "#EF4444",
-                      }}
-                    ></div>
-                  </div>
+                <div className="confidence-bar">
+                  <div
+                    className="confidence-fill"
+                    style={{
+                      width: `${confidencePercent}%`,
+                      backgroundColor:
+                        confidencePercent > 80
+                          ? "#10B981"
+                          : confidencePercent > 60
+                            ? "#F59E0B"
+                            : "#EF4444",
+                    }}
+                  ></div>
                 </div>
-              </div>
-            </div>
-
-            {/* Live Graphs */}
-            <div className="card graph-card">
-              <div className="card-header">
-                <h2>
-                  <i className="fas fa-wave-square"></i> Acceleration Live Graph
-                  (g)
-                </h2>
-              </div>
-              <div className="graph-container">
-                <Line data={graphData.accel} options={chartOptions} />
-              </div>
-            </div>
-
-            <div className="card graph-card">
-              <div className="card-header">
-                <h2>
-                  <i className="fas fa-compass"></i> Gyroscope Live Graph (°/s)
-                </h2>
-              </div>
-              <div className="graph-container">
-                <Line data={graphData.gyro} options={chartOptions} />
-              </div>
-            </div>
-
-            {/* Sensor Meters */}
-            <div className="card meters-card">
-              <div className="card-header">
-                <h2>
-                  <i className="fas fa-tachometer-alt"></i> Sensor Meters
-                </h2>
-              </div>
-
-              <div className="sensor-group">
-                <div className="sensor-section">
-                  <h3>Acceleration (g)</h3>
-                  <div className="meters">
-                    {sensorData?.samples?.[0] && (
-                      <>
-                        {renderMeter(
-                          "AX",
-                          sensorData.samples[0].ax,
-                          chartColors.ax,
-                        )}
-                        {renderMeter(
-                          "AY",
-                          sensorData.samples[0].ay,
-                          chartColors.ay,
-                        )}
-                        {renderMeter(
-                          "AZ",
-                          sensorData.samples[0].az,
-                          chartColors.az,
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <div className="sensor-section">
-                  <h3>Gyroscope (°/s)</h3>
-                  <div className="meters">
-                    {sensorData?.samples?.[0] && (
-                      <>
-                        {renderMeter(
-                          "GX",
-                          sensorData.samples[0].gx,
-                          chartColors.gx,
-                          0.01,
-                        )}
-                        {renderMeter(
-                          "GY",
-                          sensorData.samples[0].gy,
-                          chartColors.gy,
-                          0.01,
-                        )}
-                        {renderMeter(
-                          "GZ",
-                          sensorData.samples[0].gz,
-                          chartColors.gz,
-                          0.01,
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Data Table */}
-            <div className="card data-card">
-              <div className="card-header">
-                <h2>
-                  <i className="fas fa-table"></i> Current Sensor Data
-                </h2>
-                <div className="battery-display">
-                  <div className="battery-icon">
-                    <div
-                      className="battery-level"
-                      style={{
-                        width: `${sensorData?.samples?.[0]?.battery || 0}%`,
-                      }}
-                    ></div>
-                  </div>
-                  <span>{sensorData?.samples?.[0]?.battery || 0}%</span>
-                </div>
-              </div>
-
-              {sensorData?.samples?.[0] && (
-                <div className="data-grid">
-                  <div className="data-row">
-                    <span className="data-label">Timestamp</span>
-                    <span className="data-value">
-                      {new Date(sensorData.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  <div className="data-row">
-                    <span className="data-label">Acceleration X</span>
-                    <span className="data-value">
-                      {sensorData.samples[0].ax.toFixed(4)} g
-                    </span>
-                  </div>
-                  <div className="data-row">
-                    <span className="data-label">Acceleration Y</span>
-                    <span className="data-value">
-                      {sensorData.samples[0].ay.toFixed(4)} g
-                    </span>
-                  </div>
-                  <div className="data-row">
-                    <span className="data-label">Acceleration Z</span>
-                    <span className="data-value">
-                      {sensorData.samples[0].az.toFixed(4)} g
-                    </span>
-                  </div>
-                  <div className="data-row">
-                    <span className="data-label">Gyroscope X</span>
-                    <span className="data-value">
-                      {sensorData.samples[0].gx.toFixed(6)} °/s
-                    </span>
-                  </div>
-                  <div className="data-row">
-                    <span className="data-label">Gyroscope Y</span>
-                    <span className="data-value">
-                      {sensorData.samples[0].gy.toFixed(6)} °/s
-                    </span>
-                  </div>
-                  <div className="data-row">
-                    <span className="data-label">Gyroscope Z</span>
-                    <span className="data-value">
-                      {sensorData.samples[0].gz.toFixed(6)} °/s
-                    </span>
-                  </div>
-                  <div className="data-row">
-                    <span className="data-label">Device Timestamp</span>
-                    <span className="data-value">
-                      {sensorData.samples[0].device_timestamp_ms} ms
-                    </span>
-                  </div>
-                  <div className="data-row">
-                    <span className="data-label">Buffer Size</span>
-                    <span className="data-value">
-                      {sensorData.buffer_size} samples
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Activity History */}
-            <div className="card history-card">
-              <div className="card-header">
-                <h2>
-                  <i className="fas fa-history"></i> Recent Predictions
-                </h2>
-              </div>
-
-              <div className="history-list">
-                {history.slice(0, 5).map((item, index) => {
-                  const config =
-                    predictionConfigs[item.prediction] || predictionConfigs.rest;
-                  return (
-                    <div key={index} className="history-item">
-                      <div
-                        className="history-icon"
-                        style={{ color: config.color }}
-                      >
-                        {config.icon}
-                      </div>
-                      <div className="history-details">
-                        <div className="history-name">
-                          {config.label}
-                          <span className="history-time">
-                            {new Date(item.timestamp).toLocaleTimeString()}
-                          </span>
-                        </div>
-                        <div className="history-footer">
-                          <span className="confidence-tag">
-                            {Math.round(item.confidence * 100)}% confidence
-                          </span>
-                          <span
-                            className={`status-tag ${item.isRest ? "rest" : "active"}`}
-                          >
-                            {item.isRest ? "Rest" : "Active"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {history.length === 0 && (
-                  <div className="empty-history">
-                    <p>No predictions recorded yet</p>
-                  </div>
-                )}
               </div>
             </div>
           </div>
-        )}
+
+          {/* Live Graphs */}
+          <div className="card graph-card">
+            <div className="card-header">
+              <h2>
+                <i className="fas fa-wave-square"></i> Acceleration Live Graph
+                (g)
+              </h2>
+            </div>
+            <div className="graph-container">
+              <Line data={graphData.accel} options={chartOptions} />
+            </div>
+          </div>
+
+          <div className="card graph-card">
+            <div className="card-header">
+              <h2>
+                <i className="fas fa-compass"></i> Gyroscope Live Graph (°/s)
+              </h2>
+            </div>
+            <div className="graph-container">
+              <Line data={graphData.gyro} options={chartOptions} />
+            </div>
+          </div>
+
+          {/* Sensor Meters */}
+          <div className="card meters-card">
+            <div className="card-header">
+              <h2>
+                <i className="fas fa-tachometer-alt"></i> Sensor Meters
+              </h2>
+            </div>
+
+            <div className="sensor-group">
+              <div className="sensor-section">
+                <h3>Acceleration (g)</h3>
+                <div className="meters">
+                  {sensorData?.samples?.[0] && (
+                    <>
+                      {renderMeter(
+                        "AX",
+                        sensorData.samples[0].ax,
+                        chartColors.ax,
+                      )}
+                      {renderMeter(
+                        "AY",
+                        sensorData.samples[0].ay,
+                        chartColors.ay,
+                      )}
+                      {renderMeter(
+                        "AZ",
+                        sensorData.samples[0].az,
+                        chartColors.az,
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="sensor-section">
+                <h3>Gyroscope (°/s)</h3>
+                <div className="meters">
+                  {sensorData?.samples?.[0] && (
+                    <>
+                      {renderMeter(
+                        "GX",
+                        sensorData.samples[0].gx,
+                        chartColors.gx,
+                        0.01,
+                      )}
+                      {renderMeter(
+                        "GY",
+                        sensorData.samples[0].gy,
+                        chartColors.gy,
+                        0.01,
+                      )}
+                      {renderMeter(
+                        "GZ",
+                        sensorData.samples[0].gz,
+                        chartColors.gz,
+                        0.01,
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Data Table */}
+          <div className="card data-card">
+            <div className="card-header">
+              <h2>
+                <i className="fas fa-table"></i> Current Sensor Data
+              </h2>
+              <div className="battery-display">
+                <div className="battery-icon">
+                  <div
+                    className="battery-level"
+                    style={{
+                      width: `${sensorData?.samples?.[0]?.battery || 0}%`,
+                    }}
+                  ></div>
+                </div>
+                <span>{sensorData?.samples?.[0]?.battery || 0}%</span>
+              </div>
+            </div>
+
+            {sensorData?.samples?.[0] && (
+              <div className="data-grid">
+                <div className="data-row">
+                  <span className="data-label">Timestamp</span>
+                  <span className="data-value">
+                    {new Date(sensorData.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">Acceleration X</span>
+                  <span className="data-value">
+                    {sensorData.samples[0].ax.toFixed(4)} g
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">Acceleration Y</span>
+                  <span className="data-value">
+                    {sensorData.samples[0].ay.toFixed(4)} g
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">Acceleration Z</span>
+                  <span className="data-value">
+                    {sensorData.samples[0].az.toFixed(4)} g
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">Gyroscope X</span>
+                  <span className="data-value">
+                    {sensorData.samples[0].gx.toFixed(6)} °/s
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">Gyroscope Y</span>
+                  <span className="data-value">
+                    {sensorData.samples[0].gy.toFixed(6)} °/s
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">Gyroscope Z</span>
+                  <span className="data-value">
+                    {sensorData.samples[0].gz.toFixed(6)} °/s
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">Device Timestamp</span>
+                  <span className="data-value">
+                    {sensorData.samples[0].device_timestamp_ms} ms
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-label">Buffer Size</span>
+                  <span className="data-value">
+                    {sensorData.buffer_size} samples
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Activity History */}
+          <div className="card history-card">
+            <div className="card-header">
+              <h2>
+                <i className="fas fa-history"></i> Recent Predictions
+              </h2>
+            </div>
+
+            <div className="history-list">
+              {history.slice(0, 5).map((item, index) => {
+                const config =
+                  predictionConfigs[item.prediction] || predictionConfigs.rest;
+                return (
+                  <div key={index} className="history-item">
+                    <div
+                      className="history-icon"
+                      style={{ color: config.color }}
+                    >
+                      {config.icon}
+                    </div>
+                    <div className="history-details">
+                      <div className="history-name">
+                        {config.label}
+                        <span className="history-time">
+                          {new Date(item.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <div className="history-footer">
+                        <span className="confidence-tag">
+                          {Math.round(item.confidence * 100)}% confidence
+                        </span>
+                        <span
+                          className={`status-tag ${item.isRest ? "rest" : "active"}`}
+                        >
+                          {item.isRest ? "Rest" : "Active"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {history.length === 0 && (
+                <div className="empty-history">
+                  <p>No predictions recorded yet</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        {/* )} */}
       </div>
     </div>
   );
