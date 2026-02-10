@@ -1,6 +1,5 @@
-// App.js
-import React, { useState, useEffect, useRef } from 'react';
-import './WithendPoint.css';
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import "./WithendPoint.css";
 
 // Chart.js for graphing
 import {
@@ -11,10 +10,10 @@ import {
   Title,
   Tooltip,
   Legend,
-  TimeScale
-} from 'chart.js';
-import { Line } from 'react-chartjs-2';
-import 'chartjs-adapter-date-fns';
+  TimeScale,
+} from "chart.js";
+import { Line } from "react-chartjs-2";
+import "chartjs-adapter-date-fns";
 
 // Register ChartJS components
 ChartJS.register(
@@ -24,69 +23,196 @@ ChartJS.register(
   TimeScale,
   Title,
   Tooltip,
-  Legend
+  Legend,
 );
 
 function WithEndPoint() {
   const [sensorData, setSensorData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [connected, setConnected] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(2000);
   const [history, setHistory] = useState([]);
   const [graphData, setGraphData] = useState({
     accel: { labels: [], datasets: [] },
-    gyro: { labels: [], datasets: [] }
+    gyro: { labels: [], datasets: [] },
   });
-  
+
   const historyRef = useRef([]);
   const MAX_HISTORY = 50;
 
   const predictionConfigs = {
-    'cross_body': { color: '#3B82F6', icon: '↔️', label: 'Cross Body', bgColor: 'rgba(59, 130, 246, 0.1)' },
-    'normal': { color: '#10B981', icon: '🔄', label: 'Normal Curl', bgColor: 'rgba(16, 185, 129, 0.1)' },
-    'harnold': { color: '#F59E0B', icon: '💪', label: 'Harnold Press', bgColor: 'rgba(245, 158, 11, 0.1)' },
-    'gonlet': { color: '#8B5CF6', icon: '🏋️', label: 'Gonlet Swing', bgColor: 'rgba(139, 92, 246, 0.1)' },
-    'rest': { color: '#6B7280', icon: '⏸️', label: 'Rest', bgColor: 'rgba(107, 114, 128, 0.1)' }
+    cross_body: {
+      color: "#3B82F6",
+      icon: "↔️",
+      label: "Cross Body",
+      bgColor: "rgba(59, 130, 246, 0.1)",
+    },
+    normal: {
+      color: "#10B981",
+      icon: "🔄",
+      label: "Normal Curl",
+      bgColor: "rgba(16, 185, 129, 0.1)",
+    },
+    harnold: {
+      color: "#F59E0B",
+      icon: "💪",
+      label: "Harnold Press",
+      bgColor: "rgba(245, 158, 11, 0.1)",
+    },
+    gonlet: {
+      color: "#8B5CF6",
+      icon: "🏋️",
+      label: "Gonlet Swing",
+      bgColor: "rgba(139, 92, 246, 0.1)",
+    },
+    rest: {
+      color: "#6B7280",
+      icon: "⏸️",
+      label: "Rest",
+      bgColor: "rgba(107, 114, 128, 0.1)",
+    },
   };
 
   const chartColors = {
-    ax: '#EF4444', // Red
-    ay: '#10B981', // Green
-    az: '#3B82F6', // Blue
-    gx: '#F59E0B', // Orange
-    gy: '#8B5CF6', // Purple
-    gz: '#EC4899'  // Pink
+    ax: "#EF4444", // Red
+    ay: "#10B981", // Green
+    az: "#3B82F6", // Blue
+    gx: "#F59E0B", // Orange
+    gy: "#8B5CF6", // Purple
+    gz: "#EC4899", // Pink
   };
 
   const fetchData = async () => {
     try {
-      const response = await fetch('http://192.168.0.17:8000/data');
-      if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-      
+      const response = await fetch("http://192.168.0.17:8000/data");
+      if (!response.ok)
+        throw new Error(`HTTP error! Status: ${response.status}`);
+
       const data = await response.json();
       setSensorData(data);
-      
+
       // Update history
       const newHistory = {
         timestamp: new Date().toISOString(),
         prediction: data.latest_prediction,
         confidence: data.latest_confidence,
         isRest: data.latest_is_rest,
-        sample: data.samples?.[0]
+        sample: data.samples?.[0],
       };
-      
-      historyRef.current = [newHistory, ...historyRef.current.slice(0, MAX_HISTORY - 1)];
+
+      historyRef.current = [
+        newHistory,
+        ...historyRef.current.slice(0, MAX_HISTORY - 1),
+      ];
       setHistory(historyRef.current);
-      
+
       // Update graph data
       if (data.samples?.[0]) {
         updateGraphData(newHistory);
       }
       
-      setError(null);
+      setError(null); // Clear any previous errors on successful fetch
     } catch (err) {
-      setError(`Failed to fetch: ${err.message}`);
+      console.error("Failed to fetch sensor data:", err);
+      // Don't show alert or set error for fetch failures
+      // Only set error for connection-related failures
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const checkStatus = async () => {
+    try {
+      const response = await fetch("http://192.168.0.17:8000/status");
+      if (!response.ok)
+        throw new Error(`HTTP error! Status: ${response.status}`);
+
+      const data = await response.json();
+      setConnected(data.connected);
+      setError(null); // Clear any previous errors
+      return data.connected;
+    } catch (err) {
+      console.error("Failed to get status:", err);
+      setConnected(false);
+      setError("Failed to check device status");
+      return false;
+    }
+  };
+
+  const ConnectBle = async () => {
+    setLoading(true);
+    setError(null); // Clear previous errors
+    
+    try {
+      // Step 1: Send connect request
+      const response = await fetch("http://192.168.0.17:8000/connect", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Connection request failed: ${response.status}`);
+      }
+
+      // Step 2: Wait a moment for connection to establish
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // Step 3: Check if connection succeeded
+      const isConnected = await checkStatus();
+      
+      if (!isConnected) {
+        throw new Error("Connection attempt failed. Please try again.");
+      }
+      
+      // Step 4: Start fetching data once connected
+      await fetchData();
+      
+    } catch (err) {
+      setError(`Failed to connect: ${err.message}`);
+      setConnected(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const DisConnectBle = async () => {
+    setLoading(true);
+    setError(null); // Clear previous errors
+    
+    try {
+      // Step 1: Send disconnect request
+      const response = await fetch("http://192.168.0.17:8000/disconnect", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Disconnect request failed: ${response.status}`);
+      }
+
+      // Step 2: Wait a moment for disconnection to complete
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Step 3: Verify disconnection
+      const isConnected = await checkStatus();
+      
+      if (isConnected) {
+        throw new Error("Failed to disconnect from device");
+      }
+      
+      // Step 4: Clear sensor data when disconnected
+      setSensorData(null);
+      setHistory([]);
+      historyRef.current = [];
+      
+    } catch (err) {
+      setError(`Failed to disconnect: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -95,44 +221,46 @@ function WithEndPoint() {
   const updateGraphData = (newData) => {
     const timestamp = new Date(newData.timestamp);
     const sample = newData.sample;
-    
-    setGraphData(prev => {
+
+    setGraphData((prev) => {
       const newLabels = [...prev.accel.labels, timestamp];
       if (newLabels.length > MAX_HISTORY) newLabels.shift();
-      
+
       const updateDataset = (key, label, color) => {
-        const existing = prev.accel.datasets.find(ds => ds.label === label);
-        const values = existing ? [...existing.data, sample[key]] : [sample[key]];
+        const existing = prev.accel.datasets.find((ds) => ds.label === label);
+        const values = existing
+          ? [...existing.data, sample[key]]
+          : [sample[key]];
         if (values.length > MAX_HISTORY) values.shift();
-        
+
         return {
           label,
           data: values,
           borderColor: color,
-          backgroundColor: color + '20',
+          backgroundColor: color + "20",
           borderWidth: 2,
           tension: 0.4,
-          pointRadius: 2
+          pointRadius: 2,
         };
       };
-      
+
       return {
         accel: {
           labels: newLabels,
           datasets: [
-            updateDataset('ax', 'Accel X', chartColors.ax),
-            updateDataset('ay', 'Accel Y', chartColors.ay),
-            updateDataset('az', 'Accel Z', chartColors.az)
-          ]
+            updateDataset("ax", "Accel X", chartColors.ax),
+            updateDataset("ay", "Accel Y", chartColors.ay),
+            updateDataset("az", "Accel Z", chartColors.az),
+          ],
         },
         gyro: {
           labels: newLabels,
           datasets: [
-            updateDataset('gx', 'Gyro X', chartColors.gx),
-            updateDataset('gy', 'Gyro Y', chartColors.gy),
-            updateDataset('gz', 'Gyro Z', chartColors.gz)
-          ]
-        }
+            updateDataset("gx", "Gyro X", chartColors.gx),
+            updateDataset("gy", "Gyro Y", chartColors.gy),
+            updateDataset("gz", "Gyro Z", chartColors.gz),
+          ],
+        },
       };
     });
   };
@@ -141,50 +269,56 @@ function WithEndPoint() {
     responsive: true,
     maintainAspectRatio: false,
     animation: {
-      duration: 0
+      duration: 0,
     },
     scales: {
       x: {
-        type: 'time',
+        type: "time",
         time: {
-          unit: 'second',
+          unit: "second",
           displayFormats: {
-            second: 'HH:mm:ss'
-          }
+            second: "HH:mm:ss",
+          },
         },
         grid: {
-          color: 'rgba(0,0,0,0.05)'
-        }
+          color: "rgba(0,0,0,0.05)",
+        },
       },
       y: {
         grid: {
-          color: 'rgba(0,0,0,0.05)'
-        }
-      }
+          color: "rgba(0,0,0,0.05)",
+        },
+      },
     },
     plugins: {
       legend: {
-        position: 'top',
+        position: "top",
       },
       tooltip: {
-        mode: 'index',
-        intersect: false
-      }
+        mode: "index",
+        intersect: false,
+      },
     },
     interaction: {
       intersect: false,
-      mode: 'nearest'
-    }
+      mode: "nearest",
+    },
   };
 
   useEffect(() => {
-    fetchData();
+    // Initial status check
+    // checkStatus();
     
-    if (autoRefresh) {
+    // Initial data fetch
+    // fetchData();
+  }, []);
+
+  useEffect(() => {
+    if (autoRefresh && connected) {
       const interval = setInterval(fetchData, refreshInterval);
       return () => clearInterval(interval);
     }
-  }, [autoRefresh, refreshInterval]);
+  }, [autoRefresh, refreshInterval, connected]);
 
   const normalizeValue = (value, max = 10) => {
     const clamped = Math.max(-max, Math.min(max, value));
@@ -200,12 +334,12 @@ function WithEndPoint() {
           <span>{value.toFixed(4)}</span>
         </div>
         <div className="meter-bar">
-          <div 
+          <div
             className="meter-fill"
             style={{
               width: `${width}%`,
               backgroundColor: color,
-              marginLeft: value < 0 ? `${100 - width}%` : '0'
+              marginLeft: value < 0 ? `${100 - width}%` : "0",
             }}
           ></div>
         </div>
@@ -220,268 +354,406 @@ function WithEndPoint() {
 
   if (loading) {
     return (
-      <div className="loading-screen">
+      <div className="loading-screen  text-center">
         <div className="spinner"></div>
-        <p>Connecting to IMU Sensor...</p>
+        <p>{connected ? "Fetching sensor data..." : "Connecting to IMU Sensor..."}</p>
       </div>
     );
   }
 
-  const currentConfig = sensorData?.latest_prediction ? 
-    predictionConfigs[sensorData.latest_prediction] : 
-    { color: '#6B7280', icon: '❓', label: 'Unknown', bgColor: 'rgba(107, 114, 128, 0.1)' };
+  const currentConfig = sensorData?.latest_prediction
+    ? predictionConfigs[sensorData.latest_prediction]
+    : {
+        color: "#6B7280",
+        icon: "❓",
+        label: "Unknown",
+        bgColor: "rgba(107, 114, 128, 0.1)",
+      };
 
-  const confidencePercent = sensorData ? Math.round(sensorData.latest_confidence * 100) : 0;
+  const confidencePercent = sensorData
+    ? Math.round(sensorData.latest_confidence * 100)
+    : 0;
 
   return (
     <div className="app-container">
-      {/* Header */}
-      <header className="header">
-        <div className="header-left">
-          <h1><i className="fas fa-dumbbell"></i> IMU Exercise Monitor</h1>
-          <p className="subtitle">Real-time Motion Analysis Dashboard</p>
-        </div>
-        
-        <div className="header-right">
-          <div className="connection-status">
-            <div className={`status-dot ${error ? 'disconnected' : 'connected'}`}></div>
-            <span>{error ? 'Disconnected' : 'Connected'}</span>
+      <div
+        style={{
+          width: "95%",
+        }}
+      >
+        {/* Header */}
+        <header className="header">
+          <div className="header-left">
+            <h1>
+              <i className="fas fa-dumbbell"></i> IMU Exercise Monitor
+            </h1>
+            <p className="subtitle">Real-time Motion Analysis Dashboard</p>
           </div>
-          
-          <div className="controls">
-            <button onClick={fetchData} className="btn btn-primary">
-              <i className="fas fa-sync-alt"></i> Refresh
-            </button>
-            
-            <label className="toggle">
-              <input 
-                type="checkbox" 
-                checked={autoRefresh}
-                onChange={(e) => setAutoRefresh(e.target.checked)}
-              />
-              <span>Auto-refresh</span>
-            </label>
-            
-            <select 
-              value={refreshInterval}
-              onChange={(e) => setRefreshInterval(Number(e.target.value))}
-              className="interval-select"
+
+          <div className="header-right">
+            <div className="connection-status">
+              <button
+                onClick={() => {
+                  if (connected) {
+                    DisConnectBle();
+                  } else {
+                    ConnectBle();
+                  }
+                }}
+                className="btn btn-primary"
+                disabled={loading}
+              >
+                <i className="fas fa-bluetooth-b"></i>
+                <span>{connected ? "Disconnect" : "Connect"}</span>
+              </button>
+              <div
+                className={`status-dot ${connected ? "connected" : "disconnected"}`}
+              ></div>
+              <span>{connected ? "Connected" : "Disconnected"}</span>
+            </div>
+
+            <div className="controls">
+              <button 
+                onClick={fetchData} 
+                className="btn btn-primary"
+                disabled={!connected || loading}
+              >
+                <i className="fas fa-sync-alt"></i> Refresh
+              </button>
+
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  disabled={!connected}
+                />
+                <span>Auto-refresh</span>
+              </label>
+
+              <select
+                value={refreshInterval}
+                onChange={(e) => setRefreshInterval(Number(e.target.value))}
+                className="interval-select"
+                disabled={!connected}
+              >
+                <option value={300}>300 ms</option>
+                <option value={1000}>1 sec</option>
+                <option value={2000}>2 sec</option>
+                <option value={5000}>5 sec</option>
+                <option value={10000}>10 sec</option>
+              </select>
+            </div>
+          </div>
+        </header>
+
+        {error && (
+          <div className="error-banner">
+            <i className="fas fa-exclamation-triangle"></i>
+            <span>{error}</span>
+            <button 
+              className="error-close" 
+              onClick={() => setError(null)}
             >
-              <option value={1000}>1 sec</option>
-              <option value={2000}>2 sec</option>
-              <option value={5000}>5 sec</option>
-              <option value={10000}>10 sec</option>
-            </select>
+              ×
+            </button>
           </div>
-        </div>
-      </header>
+        )}
 
-      {error && (
-        <div className="error-banner">
-          <i className="fas fa-exclamation-triangle"></i>
-          <span>{error}</span>
-          <button onClick={fetchData} className="btn btn-small">
-            Retry
-          </button>
-        </div>
-      )}
+        {/* Connection Required Message */}
+        {!connected && !error && (
+          <div className="connection-required">
+            <i className="fas fa-plug"></i>
+            <p>Please connect to the device to view sensor data</p>
+          </div>
+        )}
 
-      {/* Main Dashboard */}
-      <div className="dashboard">
-        {/* Prediction Card */}
-        <div className="card prediction-card text-center" style={{ width: '100%' }}>
-          <div className="card-header">
-            <h2><i className="fas fa-chart-line"></i> Current Prediction</h2>
-            <div className={`status-badge ${sensorData?.latest_is_rest ? 'rest' : 'active'}`}>
-              {sensorData?.latest_is_rest ? 'RESTING' : 'ACTIVE'}
-            </div>
-          </div>
-          
-          <div className="prediction-content">
-            <div className="prediction-icon">{currentConfig.icon}</div>
-            <div className="prediction-details">
-              <div className="prediction-name">{currentConfig.label}</div>
-              <div className="prediction-value" style={{ color: currentConfig.color }}>
-                {sensorData?.latest_prediction?.toUpperCase()?.replace('_', ' ') || 'UNKNOWN'}
+        {/* Main Dashboard - Only show when connected */}
+        {!connected && (
+          <div className="dashboard">
+            {/* Prediction Card */}
+            <div
+              className="card prediction-card text-center"
+              style={{ width: "100%" }}
+            >
+              <div className="card-header">
+                <h2>
+                  <i className="fas fa-chart-line"></i> Current Prediction
+                </h2>
+                <div
+                  className={`status-badge ${sensorData?.latest_is_rest ? "rest" : "active"}`}
+                >
+                  {sensorData?.latest_is_rest ? "RESTING" : "ACTIVE"}
+                </div>
               </div>
-            </div>
-            
-            <div className="confidence-section">
-              <div className="confidence-header">
-                <span>Confidence</span>
-                <span className="confidence-percent" style={{
-                  color: confidencePercent > 80 ? '#10B981' : 
-                         confidencePercent > 60 ? '#F59E0B' : '#EF4444'
-                }}>
-                  {confidencePercent}%
-                </span>
-              </div>
-              <div className="confidence-bar">
-                <div 
-                  className="confidence-fill"
-                  style={{ 
-                    width: `${confidencePercent}%`,
-                    backgroundColor: confidencePercent > 80 ? '#10B981' : 
-                                   confidencePercent > 60 ? '#F59E0B' : '#EF4444'
-                  }}
-                ></div>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        {/* Live Graphs */}
-        <div className="card graph-card">
-          <div className="card-header">
-            <h2><i className="fas fa-wave-square"></i> Acceleration Live Graph (g)</h2>
-          </div>
-          <div className="graph-container">
-            <Line data={graphData.accel} options={chartOptions} />
-          </div>
-        </div>
-
-        <div className="card graph-card">
-          <div className="card-header">
-            <h2><i className="fas fa-compass"></i> Gyroscope Live Graph (°/s)</h2>
-          </div>
-          <div className="graph-container">
-            <Line data={graphData.gyro} options={chartOptions} />
-          </div>
-        </div>
-
-        {/* Sensor Meters */}
-        <div className="card meters-card">
-          <div className="card-header">
-            <h2><i className="fas fa-tachometer-alt"></i> Sensor Meters</h2>
-          </div>
-          
-          <div className="sensor-group">
-            <div className="sensor-section">
-              <h3>Acceleration (g)</h3>
-              <div className="meters">
-                {sensorData?.samples?.[0] && (
-                  <>
-                    {renderMeter('AX', sensorData.samples[0].ax, chartColors.ax)}
-                    {renderMeter('AY', sensorData.samples[0].ay, chartColors.ay)}
-                    {renderMeter('AZ', sensorData.samples[0].az, chartColors.az)}
-                  </>
-                )}
-              </div>
-            </div>
-            
-            <div className="sensor-section">
-              <h3>Gyroscope (°/s)</h3>
-              <div className="meters">
-                {sensorData?.samples?.[0] && (
-                  <>
-                    {renderMeter('GX', sensorData.samples[0].gx, chartColors.gx, 0.01)}
-                    {renderMeter('GY', sensorData.samples[0].gy, chartColors.gy, 0.01)}
-                    {renderMeter('GZ', sensorData.samples[0].gz, chartColors.gz, 0.01)}
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Data Table */}
-        <div className="card data-card">
-          <div className="card-header">
-            <h2><i className="fas fa-table"></i> Current Sensor Data</h2>
-            <div className="battery-display">
-              <div className="battery-icon">
-                <div 
-                  className="battery-level"
-                  style={{ width: `${sensorData?.samples?.[0]?.battery || 0}%` }}
-                ></div>
-              </div>
-              <span>{sensorData?.samples?.[0]?.battery || 0}%</span>
-            </div>
-          </div>
-          
-          {sensorData?.samples?.[0] && (
-            <div className="data-grid">
-              <div className="data-row">
-                <span className="data-label">Timestamp</span>
-                <span className="data-value">{new Date(sensorData.timestamp).toLocaleTimeString()}</span>
-              </div>
-              <div className="data-row">
-                <span className="data-label">Acceleration X</span>
-                <span className="data-value">{sensorData.samples[0].ax.toFixed(4)} g</span>
-              </div>
-              <div className="data-row">
-                <span className="data-label">Acceleration Y</span>
-                <span className="data-value">{sensorData.samples[0].ay.toFixed(4)} g</span>
-              </div>
-              <div className="data-row">
-                <span className="data-label">Acceleration Z</span>
-                <span className="data-value">{sensorData.samples[0].az.toFixed(4)} g</span>
-              </div>
-              <div className="data-row">
-                <span className="data-label">Gyroscope X</span>
-                <span className="data-value">{sensorData.samples[0].gx.toFixed(6)} °/s</span>
-              </div>
-              <div className="data-row">
-                <span className="data-label">Gyroscope Y</span>
-                <span className="data-value">{sensorData.samples[0].gy.toFixed(6)} °/s</span>
-              </div>
-              <div className="data-row">
-                <span className="data-label">Gyroscope Z</span>
-                <span className="data-value">{sensorData.samples[0].gz.toFixed(6)} °/s</span>
-              </div>
-              <div className="data-row">
-                <span className="data-label">Device Timestamp</span>
-                <span className="data-value">{sensorData.samples[0].device_timestamp_ms} ms</span>
-              </div>
-              <div className="data-row">
-                <span className="data-label">Buffer Size</span>
-                <span className="data-value">{sensorData.buffer_size} samples</span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Activity History */}
-        <div className="card history-card">
-          <div className="card-header">
-            <h2><i className="fas fa-history"></i> Recent Predictions</h2>
-          </div>
-          
-          <div className="history-list">
-            {history.slice(0, 5).map((item, index) => {
-              const config = predictionConfigs[item.prediction] || predictionConfigs.rest;
-              return (
-                <div key={index} className="history-item">
-                  <div className="history-icon" style={{ color: config.color }}>
-                    {config.icon}
-                  </div>
-                  <div className="history-details">
-                    <div className="history-name">
-                      {config.label}
-                      <span className="history-time">
-                        {new Date(item.timestamp).toLocaleTimeString()}
-                      </span>
-                    </div>
-                    <div className="history-footer">
-                      <span className="confidence-tag">
-                        {Math.round(item.confidence * 100)}% confidence
-                      </span>
-                      <span className={`status-tag ${item.isRest ? 'rest' : 'active'}`}>
-                        {item.isRest ? 'Rest' : 'Active'}
-                      </span>
-                    </div>
+              <div className="prediction-content">
+                <div className="prediction-icon">{currentConfig?.icon}</div>
+                <div className="prediction-details">
+                  <div className="prediction-name">{currentConfig?.label}</div>
+                  <div
+                    className="prediction-value"
+                    style={{ color: currentConfig?.color }}
+                  >
+                    {sensorData?.latest_prediction
+                      ?.toUpperCase()
+                      ?.replace("_", " ") || "UNKNOWN"}
                   </div>
                 </div>
-              );
-            })}
-            
-            {history.length === 0 && (
-              <div className="empty-history">
-                <p>No predictions recorded yet</p>
+
+                <div className="confidence-section">
+                  <div className="confidence-header">
+                    <span>Confidence</span>
+                    <span
+                      className="confidence-percent"
+                      style={{
+                        color:
+                          confidencePercent > 80
+                            ? "#10B981"
+                            : confidencePercent > 60
+                              ? "#F59E0B"
+                              : "#EF4444",
+                      }}
+                    >
+                      {confidencePercent}%
+                    </span>
+                  </div>
+                  <div className="confidence-bar">
+                    <div
+                      className="confidence-fill"
+                      style={{
+                        width: `${confidencePercent}%`,
+                        backgroundColor:
+                          confidencePercent > 80
+                            ? "#10B981"
+                            : confidencePercent > 60
+                              ? "#F59E0B"
+                              : "#EF4444",
+                      }}
+                    ></div>
+                  </div>
+                </div>
               </div>
-            )}
+            </div>
+
+            {/* Live Graphs */}
+            <div className="card graph-card">
+              <div className="card-header">
+                <h2>
+                  <i className="fas fa-wave-square"></i> Acceleration Live Graph
+                  (g)
+                </h2>
+              </div>
+              <div className="graph-container">
+                <Line data={graphData.accel} options={chartOptions} />
+              </div>
+            </div>
+
+            <div className="card graph-card">
+              <div className="card-header">
+                <h2>
+                  <i className="fas fa-compass"></i> Gyroscope Live Graph (°/s)
+                </h2>
+              </div>
+              <div className="graph-container">
+                <Line data={graphData.gyro} options={chartOptions} />
+              </div>
+            </div>
+
+            {/* Sensor Meters */}
+            <div className="card meters-card">
+              <div className="card-header">
+                <h2>
+                  <i className="fas fa-tachometer-alt"></i> Sensor Meters
+                </h2>
+              </div>
+
+              <div className="sensor-group">
+                <div className="sensor-section">
+                  <h3>Acceleration (g)</h3>
+                  <div className="meters">
+                    {sensorData?.samples?.[0] && (
+                      <>
+                        {renderMeter(
+                          "AX",
+                          sensorData.samples[0].ax,
+                          chartColors.ax,
+                        )}
+                        {renderMeter(
+                          "AY",
+                          sensorData.samples[0].ay,
+                          chartColors.ay,
+                        )}
+                        {renderMeter(
+                          "AZ",
+                          sensorData.samples[0].az,
+                          chartColors.az,
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="sensor-section">
+                  <h3>Gyroscope (°/s)</h3>
+                  <div className="meters">
+                    {sensorData?.samples?.[0] && (
+                      <>
+                        {renderMeter(
+                          "GX",
+                          sensorData.samples[0].gx,
+                          chartColors.gx,
+                          0.01,
+                        )}
+                        {renderMeter(
+                          "GY",
+                          sensorData.samples[0].gy,
+                          chartColors.gy,
+                          0.01,
+                        )}
+                        {renderMeter(
+                          "GZ",
+                          sensorData.samples[0].gz,
+                          chartColors.gz,
+                          0.01,
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Data Table */}
+            <div className="card data-card">
+              <div className="card-header">
+                <h2>
+                  <i className="fas fa-table"></i> Current Sensor Data
+                </h2>
+                <div className="battery-display">
+                  <div className="battery-icon">
+                    <div
+                      className="battery-level"
+                      style={{
+                        width: `${sensorData?.samples?.[0]?.battery || 0}%`,
+                      }}
+                    ></div>
+                  </div>
+                  <span>{sensorData?.samples?.[0]?.battery || 0}%</span>
+                </div>
+              </div>
+
+              {sensorData?.samples?.[0] && (
+                <div className="data-grid">
+                  <div className="data-row">
+                    <span className="data-label">Timestamp</span>
+                    <span className="data-value">
+                      {new Date(sensorData.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-label">Acceleration X</span>
+                    <span className="data-value">
+                      {sensorData.samples[0].ax.toFixed(4)} g
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-label">Acceleration Y</span>
+                    <span className="data-value">
+                      {sensorData.samples[0].ay.toFixed(4)} g
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-label">Acceleration Z</span>
+                    <span className="data-value">
+                      {sensorData.samples[0].az.toFixed(4)} g
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-label">Gyroscope X</span>
+                    <span className="data-value">
+                      {sensorData.samples[0].gx.toFixed(6)} °/s
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-label">Gyroscope Y</span>
+                    <span className="data-value">
+                      {sensorData.samples[0].gy.toFixed(6)} °/s
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-label">Gyroscope Z</span>
+                    <span className="data-value">
+                      {sensorData.samples[0].gz.toFixed(6)} °/s
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-label">Device Timestamp</span>
+                    <span className="data-value">
+                      {sensorData.samples[0].device_timestamp_ms} ms
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-label">Buffer Size</span>
+                    <span className="data-value">
+                      {sensorData.buffer_size} samples
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Activity History */}
+            <div className="card history-card">
+              <div className="card-header">
+                <h2>
+                  <i className="fas fa-history"></i> Recent Predictions
+                </h2>
+              </div>
+
+              <div className="history-list">
+                {history.slice(0, 5).map((item, index) => {
+                  const config =
+                    predictionConfigs[item.prediction] || predictionConfigs.rest;
+                  return (
+                    <div key={index} className="history-item">
+                      <div
+                        className="history-icon"
+                        style={{ color: config.color }}
+                      >
+                        {config.icon}
+                      </div>
+                      <div className="history-details">
+                        <div className="history-name">
+                          {config.label}
+                          <span className="history-time">
+                            {new Date(item.timestamp).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        <div className="history-footer">
+                          <span className="confidence-tag">
+                            {Math.round(item.confidence * 100)}% confidence
+                          </span>
+                          <span
+                            className={`status-tag ${item.isRest ? "rest" : "active"}`}
+                          >
+                            {item.isRest ? "Rest" : "Active"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {history.length === 0 && (
+                  <div className="empty-history">
+                    <p>No predictions recorded yet</p>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
